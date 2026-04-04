@@ -2,7 +2,7 @@ Repo for UCSD Diamondhacks 2026 submission.
 
 # To install/run
 
-First, make sure you are in the root directory of the repo.
+**Important**: make sure you are in the **_root directory_** of the repo.
 Install JS dependencies:
 ```bash
 pnpm i
