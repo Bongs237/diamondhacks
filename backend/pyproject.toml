@@ -6,4 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.135.3",
+    "browser-use>=0.2.0",
+    "uagents>=0.10.0",
+    "anthropic>=0.40.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
 ]
