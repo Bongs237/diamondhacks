@@ -1,0 +1,15 @@
+{
+    "name": "Sarah",
+    "likes": ["improv", "stand-up"],
+    "dislikes": [],
+    "budget_target": 30,
+    "budget_max": 35,
+    "budget_strictness": "strict",
+    "available_times": ["sat-night"],
+    "max_transit_min": 20,
+    "location": [40.75, -73.98],
+    "dietary": ["vegetarian"],
+    "flake_score": 0.0,
+    "events_organized": 1,
+    "notes": ""
+}

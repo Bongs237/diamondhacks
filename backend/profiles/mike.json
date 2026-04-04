@@ -1,0 +1,15 @@
+{
+    "name": "Mike",
+    "likes": ["live-music"],
+    "dislikes": [],
+    "budget_target": 60,
+    "budget_max": 70,
+    "budget_strictness": "generous",
+    "available_times": ["sat-night"],
+    "max_transit_min": 45,
+    "location": [40.71, -74.01],
+    "dietary": [],
+    "flake_score": 0.0,
+    "events_organized": 0,
+    "notes": "Only available after 8pm"
+}

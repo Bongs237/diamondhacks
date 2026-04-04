@@ -1,0 +1,15 @@
+{
+    "name": "Jordan",
+    "likes": ["stand-up", "improv", "live-music"],
+    "dislikes": [],
+    "budget_target": 45,
+    "budget_max": 50,
+    "budget_strictness": "flexible",
+    "available_times": ["sat-evening", "sat-night"],
+    "max_transit_min": 40,
+    "location": [40.74, -73.99],
+    "dietary": [],
+    "flake_score": 0.4,
+    "events_organized": 0,
+    "notes": "Chronic flaker"
+}

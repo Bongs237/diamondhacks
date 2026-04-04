@@ -1,0 +1,15 @@
+{
+    "name": "Riley",
+    "likes": ["stand-up", "improv"],
+    "dislikes": [],
+    "budget_target": 40,
+    "budget_max": 45,
+    "budget_strictness": "moderate",
+    "available_times": ["sat-evening", "sat-night"],
+    "max_transit_min": 15,
+    "location": [40.72, -73.95],
+    "dietary": [],
+    "flake_score": 0.0,
+    "events_organized": 2,
+    "notes": "Transit-sensitive, won't travel far"
+}

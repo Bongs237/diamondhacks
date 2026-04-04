@@ -1,0 +1,15 @@
+{
+    "name": "Alex",
+    "likes": ["stand-up", "live-music"],
+    "dislikes": ["improv"],
+    "budget_target": 55,
+    "budget_max": 70,
+    "budget_strictness": "flexible",
+    "available_times": ["sat-evening", "sat-night"],
+    "max_transit_min": 30,
+    "location": [40.73, -73.99],
+    "dietary": [],
+    "flake_score": 0.0,
+    "events_organized": 3,
+    "notes": ""
+}
