@@ -11,4 +11,5 @@ dependencies = [
     "anthropic>=0.40.0",
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
+    "twilio>=9.10.4",
 ]
