@@ -1,9 +1,9 @@
 Repo for UCSD Diamondhacks 2026 submission.
 
-# To run
+# To install/run
 
 First, make sure you are in the root directory of the repo.
-Install dependencies:
+Install JS dependencies:
 ```bash
 pnpm i
 ```
@@ -11,6 +11,12 @@ pnpm i
 Source the backend via the virtual environment (if VS Code/Cursor/etc doesn't do this for you):
 ```bash
 source backend/.venv/bin/activate
+```
+
+Install Python dependencies:
+```bash
+cd backend
+uv sync
 ```
 
 Run the frontend and backend:
