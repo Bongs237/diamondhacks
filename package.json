@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "frontend:dev": "next dev",
+    "frontend:build": "next build",
+    "frontend:start": "next start",
+    "frontend:lint": "eslint",
+    "backend:dev": "uvicorn backend.main:app --reload",
+    "dev": "concurrently \"npm run frontend:dev\" \"npm run backend:dev\""
   },
   "dependencies": {
+    "concurrently": "^9.2.1",
     "next": "16.2.2",
     "react": "19.2.4",
     "react-dom": "19.2.4"
