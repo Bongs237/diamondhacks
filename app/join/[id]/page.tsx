@@ -286,13 +286,13 @@ export default function Join() {
 
       <p className="text-center text-gray-500 pb-5 font-semibold"><strong>Note:</strong> All fields are free response!</p>
 
-      <div className="bg-fuchsia-50 p-7 rounded-lg min-w-[360px]">
+      <div className="bg-fuchsia-50 p-7 rounded-lg md:min-w-[550px] lg:min-w-[760px]">
         <div className="flex flex-col gap-5">
           {FIELDS.map((field) => (
             <div key={field.key} className="flex flex-col gap-1">
               <label className="text-lg font-bold">
                 {field.label}
-                {field.required && <span className="text-sm font-normal text-red-500 ml-1">*</span>}
+                {field.required && <span className="font-normal text-red-500 ml-1">*</span>}
               </label>
               {field.type === "location" ? (
                 <LocationField
