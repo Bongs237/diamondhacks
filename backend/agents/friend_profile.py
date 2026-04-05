@@ -110,14 +110,22 @@ def score_event(event: dict, profile: dict) -> dict:
         score -= 3
         reasons.append(f"time mismatch ({event_time} vs {pref_time}) (-3)")
 
-    # Category likes/dislikes
-    if event_category in likes:
-        score += 3
-        reasons.append(f"likes {event_category} (+3)")
+    # Category + name/description matching for likes/dislikes
+    event_name_lower = event.get("name", "").lower()
+    event_desc_lower = event.get("description", "").lower()
+    event_text = f"{event_category} {event_name_lower} {event_desc_lower}"
 
-    if event_category in dislikes:
-        score -= 5
-        reasons.append(f"dislikes {event_category} (-5)")
+    for like in likes:
+        if like in event_text:
+            score += 3
+            reasons.append(f"matches interest '{like}' (+3)")
+            break
+
+    for dislike in dislikes:
+        if dislike in event_text:
+            score -= 5
+            reasons.append(f"matches dislike '{dislike}' (-5)")
+            break
 
     return {"event_name": event["name"], "score": score, "vetoed": False, "reasons": reasons}
 
