@@ -2,8 +2,10 @@
 
 import { useState, useCallback } from "react";
 import { Amatic_SC } from "next/font/google";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
+import { SpinnerIcon } from "@/components/SpinnerIcon";
 import { Field } from "@/utils/types";
+import { MapPin } from "lucide-react";
 
 const amatic = Amatic_SC({
   subsets: ["latin"],
@@ -98,17 +100,12 @@ function LocationField({
       >
         {locationLoading ? (
           <>
-            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
+            <SpinnerIcon />
             Getting location...
           </>
         ) : (
           <>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-            </svg>
+            <MapPin />
             {locationCity ? "Update my location" : "Get my location"}
           </>
         )}
@@ -173,8 +170,10 @@ export default function Join() {
   const [locationCity, setLocationCity] = useState<string>("");
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationError, setLocationError] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
 
   const { id } = useParams();
+  const router = useRouter();
 
   const handleGetLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -253,23 +252,29 @@ export default function Join() {
     setErrors(newErrors);
     if (hasError) return;
 
-    const response = await fetch(`/api/submit/${id}`, {
-      method: "POST",
-      body: JSON.stringify(values),
-      headers: {
-        "Content-Type": "application/json", // Make sure you set the content type (bruh)
-      },
-    });
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/submit/${id}`, {
+        method: "POST",
+        body: JSON.stringify(values),
+        headers: {
+          "Content-Type": "application/json", // Make sure you set the content type (bruh)
+        },
+      });
 
-    console.log(values)
+      console.log(values);
 
-    if (!response.ok) {
-      throw new Error("Failed to join event");
-    }
-    
-    const data = await response.json();
-    if (data.error) {
-      throw new Error(data.error);
+      if (!response.ok) {
+        throw new Error("Failed to join event");
+      }
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      router.push(`/done`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -281,13 +286,13 @@ export default function Join() {
 
       <p className="text-center text-gray-500 pb-5 font-semibold"><strong>Note:</strong> All fields are free response!</p>
 
-      <div className="bg-fuchsia-50 p-7 rounded-lg min-w-[360px]">
+      <div className="bg-fuchsia-50 p-7 rounded-lg md:min-w-[550px] lg:min-w-[760px]">
         <div className="flex flex-col gap-5">
           {FIELDS.map((field) => (
             <div key={field.key} className="flex flex-col gap-1">
               <label className="text-lg font-bold">
                 {field.label}
-                {field.required && <span className="text-sm font-normal text-red-500 ml-1">*</span>}
+                {field.required && <span className="font-normal text-red-500 ml-1">*</span>}
               </label>
               {field.type === "location" ? (
                 <LocationField
@@ -315,10 +320,19 @@ export default function Join() {
 
         <div className="pt-5 flex justify-center">
           <button
-            className="bg-rose-600 text-white px-6 py-3 rounded-md hover:bg-rose-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            type="button"
+            disabled={submitting}
+            className="flex items-center justify-center gap-2 bg-rose-600 text-white px-6 py-3 rounded-md hover:bg-rose-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={handleSubmit}
           >
-            Submit
+            {submitting ? (
+              <>
+                <SpinnerIcon />
+                Submitting…
+              </>
+            ) : (
+              "Submit"
+            )}
           </button>
         </div>
       </div>
