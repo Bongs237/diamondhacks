@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from "react";
 import { Amatic_SC } from "next/font/google";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Field } from "@/utils/types";
 
 const amatic = Amatic_SC({
@@ -173,8 +173,10 @@ export default function Join() {
   const [locationCity, setLocationCity] = useState<string>("");
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationError, setLocationError] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
 
   const { id } = useParams();
+  const router = useRouter();
 
   const handleGetLocation = useCallback(() => {
     if (!navigator.geolocation) {
@@ -253,23 +255,29 @@ export default function Join() {
     setErrors(newErrors);
     if (hasError) return;
 
-    const response = await fetch(`/api/submit/${id}`, {
-      method: "POST",
-      body: JSON.stringify(values),
-      headers: {
-        "Content-Type": "application/json", // Make sure you set the content type (bruh)
-      },
-    });
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/submit/${id}`, {
+        method: "POST",
+        body: JSON.stringify(values),
+        headers: {
+          "Content-Type": "application/json", // Make sure you set the content type (bruh)
+        },
+      });
 
-    console.log(values)
+      console.log(values);
 
-    if (!response.ok) {
-      throw new Error("Failed to join event");
-    }
-    
-    const data = await response.json();
-    if (data.error) {
-      throw new Error(data.error);
+      if (!response.ok) {
+        throw new Error("Failed to join event");
+      }
+      const data = await response.json();
+      if (data.error) {
+        throw new Error(data.error);
+      }
+
+      router.push(`/done`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -315,10 +323,22 @@ export default function Join() {
 
         <div className="pt-5 flex justify-center">
           <button
-            className="bg-rose-600 text-white px-6 py-3 rounded-md hover:bg-rose-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            type="button"
+            disabled={submitting}
+            className="flex items-center justify-center gap-2 bg-rose-600 text-white px-6 py-3 rounded-md hover:bg-rose-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={handleSubmit}
           >
-            Submit
+            {submitting ? (
+              <>
+                <svg className="animate-spin h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden>
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                Submitting…
+              </>
+            ) : (
+              "Submit"
+            )}
           </button>
         </div>
       </div>
