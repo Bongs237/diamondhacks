@@ -62,6 +62,7 @@ except ImportError as e:
 # ---------------------------------------------------------------------------
 
 class JoinForm(BaseModel):
+    user_id: str
     name: str
     budget: str = ""
     available_times: str = ""
@@ -86,6 +87,8 @@ app.add_middleware(
 
 @app.post("/api/submit/{group_id}")
 async def join_group(group_id: str, form: JoinForm):
+    print(group_id, form, flush=True)
+
     """Receive a friend's preferences from the shareable form."""
     if group_id not in groups:
         return {"error": "Group not found"}, 404
@@ -100,6 +103,8 @@ async def join_group(group_id: str, form: JoinForm):
         logging.info("Group %s is full — queuing discovery", group_id)
         _discovery_queue.append(group_id)
 
+    print("Did we even get here?", flush=True)
+
     return {
         "status": "joined",
         "group_id": group_id,
@@ -111,6 +116,8 @@ async def join_group(group_id: str, form: JoinForm):
 
 @app.get("/api/group/{group_id}")
 async def group_status(group_id: str):
+    print("The groups are like", groups, flush=True)
+
     if group_id not in groups:
         return {"error": "Group not found"}, 404
 
@@ -123,13 +130,29 @@ async def group_status(group_id: str):
     }
 
 
-@app.post("/api/dropout/{group_id}/{name}")
-async def dropout(group_id: str, name: str):
+@app.post("/api/dropout/{group_id}/{user_id}")
+async def dropout(group_id: str, user_id: str):
     """A member drops out of a group."""
     if group_id not in groups:
         return {"error": "Group not found"}, 404
-    result = _remove_member(group_id, name)
+    result = _remove_member(group_id, user_id)
     return {"status": "removed", "detail": result}
+
+
+@app.get("/api/user/{user_id}/groups")
+async def user_groups(user_id: str):
+    """Return every group that contains a member with the given user_id."""
+    result = []
+    for gid, members in groups.items():
+        if any(m.get("user_id") == user_id for m in members):
+            result.append({
+                "group_id": gid,
+                "members": members,
+                "member_count": len(members),
+                "status": group_meta.get(gid, {}).get("status", "unknown"),
+                "vote_result": group_meta.get(gid, {}).get("vote_result"),
+            })
+    return result
 
 
 @app.get("/health")
