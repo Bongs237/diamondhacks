@@ -2,22 +2,13 @@
 
 import { useState, useCallback } from "react";
 import { Amatic_SC } from "next/font/google";
-import router from "next/router";
 import { useParams } from "next/navigation";
+import { Field } from "@/utils/types";
 
 const amatic = Amatic_SC({
   subsets: ["latin"],
   weight: ["400", "700"],
 });
-
-type Field = {
-  key: string;
-  label: string;
-  placeholder: string | undefined;
-  type: string;
-  required: boolean;
-  validate: (v: any) => string;
-}
 
 // Data driven type stuff ong fr
 // When form submitted each key is json key, value is what you put in the form
@@ -168,9 +159,6 @@ export default function Join() {
     setTouched(newTouched);
     setErrors(newErrors);
     if (hasError) return;
-
-    // Do the thing
-    console.log(values)
 
     const response = await fetch(`/api/submit/${id}`, {
       method: "POST",
