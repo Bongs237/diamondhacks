@@ -13,7 +13,7 @@ import sys
 import threading
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -91,7 +91,7 @@ async def join_group(group_id: str, form: JoinForm):
 
     """Receive a friend's preferences from the shareable form."""
     if group_id not in groups:
-        return {"error": "Group not found"}, 404
+        raise HTTPException(status_code=404, detail="Group not found")
 
     profile = form.model_dump()
     count = add_member(group_id, profile)
@@ -102,8 +102,6 @@ async def join_group(group_id: str, form: JoinForm):
     if full:
         logging.info("Group %s is full — queuing discovery", group_id)
         _discovery_queue.append(group_id)
-
-    print("Did we even get here?", flush=True)
 
     return {
         "status": "joined",
@@ -135,7 +133,13 @@ async def dropout(group_id: str, user_id: str):
     """A member drops out of a group."""
     if group_id not in groups:
         return {"error": "Group not found"}, 404
-    result = _remove_member(group_id, user_id)
+    member = next(
+        (m for m in groups[group_id] if m.get("user_id") == user_id),
+        None,
+    )
+    if not member:
+        return {"error": "Member not found in group"}, 404
+    result = _remove_member(group_id, member.get("name", ""))
     return {"status": "removed", "detail": result}
 
 

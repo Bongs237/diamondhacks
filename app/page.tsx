@@ -5,7 +5,7 @@ import { Amatic_SC } from "next/font/google";
 import { useRouter } from "next/navigation";
 import { SpinnerIcon } from "@/components/SpinnerIcon";
 import { GroupData } from "@/utils/types";
-import { Users, Calendar, ChevronRight } from "lucide-react";
+import { Users, Calendar, ChevronRight, LogOut } from "lucide-react";
 
 const amatic = Amatic_SC({
   subsets: ["latin"],
@@ -25,15 +25,11 @@ const STATUS_LABELS: Record<string, { text: string; color: string }> = {
 export default function Home() {
   const [groups, setGroups] = useState<GroupData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [droppingOut, setDroppingOut] = useState<string | null>(null);
   const router = useRouter();
 
-  useEffect(() => {
-    if (!localStorage.getItem("user_id")) {
-      localStorage.setItem("user_id", crypto.randomUUID());
-    }
-
+  const fetchGroups = () => {
     const userId = localStorage.getItem("user_id")!;
-
     fetch(`/api/user/${userId}/groups`)
       .then((res) => res.json())
       .then((data) => {
@@ -41,7 +37,32 @@ export default function Home() {
         setLoading(false);
       })
       .catch(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    if (!localStorage.getItem("user_id")) {
+      localStorage.setItem("user_id", crypto.randomUUID());
+    }
+    fetchGroups();
   }, []);
+
+  const handleDropout = async (e: React.MouseEvent, groupId: string) => {
+    e.stopPropagation();
+    if (!confirm("Are you sure you want to drop out of this event?")) return;
+
+    const userId = localStorage.getItem("user_id")!;
+    setDroppingOut(groupId);
+    try {
+      const res = await fetch(`/api/dropout/${groupId}/${userId}`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setGroups((prev) => prev.filter((g) => g.group_id !== groupId));
+      }
+    } finally {
+      setDroppingOut(null);
+    }
+  };
 
   const statusBadge = (status: string) => {
     const s = STATUS_LABELS[status] ?? STATUS_LABELS.unknown;
@@ -115,7 +136,21 @@ export default function Home() {
                   </p>
                 </div>
 
-                <ChevronRight className="h-5 w-5 text-gray-400 shrink-0" />
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={(e) => handleDropout(e, group.group_id)}
+                    disabled={droppingOut === group.group_id}
+                    className="p-2 rounded-full text-gray-400 hover:bg-red-100 hover:text-red-600 transition-colors disabled:opacity-50 cursor-pointer"
+                    title="Drop out"
+                  >
+                    {droppingOut === group.group_id ? (
+                      <SpinnerIcon className="h-5 w-5" />
+                    ) : (
+                      <LogOut className="h-5 w-5" />
+                    )}
+                  </button>
+                  <ChevronRight className="h-5 w-5 text-gray-400" />
+                </div>
               </button>
             );
           })}
