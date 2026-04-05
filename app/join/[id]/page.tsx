@@ -3,7 +3,9 @@
 import { useState, useCallback } from "react";
 import { Amatic_SC } from "next/font/google";
 import { useParams, useRouter } from "next/navigation";
+import { SpinnerIcon } from "@/components/SpinnerIcon";
 import { Field } from "@/utils/types";
+import { MapPin } from "lucide-react";
 
 const amatic = Amatic_SC({
   subsets: ["latin"],
@@ -98,17 +100,12 @@ function LocationField({
       >
         {locationLoading ? (
           <>
-            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
+            <SpinnerIcon />
             Getting location...
           </>
         ) : (
           <>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-              <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-            </svg>
+            <MapPin />
             {locationCity ? "Update my location" : "Get my location"}
           </>
         )}
@@ -330,10 +327,7 @@ export default function Join() {
           >
             {submitting ? (
               <>
-                <svg className="animate-spin h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden>
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+                <SpinnerIcon />
                 Submitting…
               </>
             ) : (
