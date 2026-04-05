@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Amatic_SC } from "next/font/google";
 import { useParams, useRouter } from "next/navigation";
 import { SpinnerIcon } from "@/components/SpinnerIcon";
@@ -175,6 +175,14 @@ export default function Join() {
   const { id } = useParams();
   const router = useRouter();
 
+  useEffect(() => {
+    // Add user id thru local storage
+    // wait you can pretend to be anyone if you can just set the local storage bruh
+    if (!localStorage.getItem("user_id")) {
+      localStorage.setItem("user_id", crypto.randomUUID());
+    }
+  }, []);
+
   const handleGetLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setLocationError("Geolocation is not supported by your browser");
@@ -237,6 +245,11 @@ export default function Join() {
   };
 
   const handleSubmit = async () => {
+    // This should never happen since you should have the user id on page load but just in case
+    if (!localStorage.getItem("user_id")) {
+      return;
+    }
+
     const newTouched: Record<string, boolean> = {};
     const newErrors: Record<string, string> = {};
     let hasError = false;
@@ -253,16 +266,17 @@ export default function Join() {
     if (hasError) return;
 
     setSubmitting(true);
+
+    console.log({...values, user_id: localStorage.getItem("user_id")})
+
     try {
       const response = await fetch(`/api/submit/${id}`, {
         method: "POST",
-        body: JSON.stringify(values),
+        body: JSON.stringify({...values, user_id: localStorage.getItem("user_id")}),
         headers: {
           "Content-Type": "application/json", // Make sure you set the content type (bruh)
         },
       });
-
-      console.log(values);
 
       if (!response.ok) {
         throw new Error("Failed to join event");
