@@ -106,9 +106,12 @@ def _run_consensus(all_votes: list[dict], events: list[dict]) -> dict:
         lines.append("No events survived — every option was vetoed by at least one member.")
 
     if len(rankings) > 1:
-        lines.append("\nOther options:")
+        lines.append("\nOther options:\n")
         for i, r in enumerate(rankings[1:], start=2):
-            lines.append(f"  {i}. {r['event']['name']} (score: {r['total_score']})")
+            e = r["event"]
+            cost = f"${e.get('cost', '?')}" if e.get('cost') else "Free"
+            lines.append(f"{i}. {e['name']} — {cost}")
+        lines.append("\nSay 'info 3' for details on any event, or pick a number to choose it.")
 
     if vetoed_list:
         lines.append(f"\nVetoed ({len(vetoed_list)}):")

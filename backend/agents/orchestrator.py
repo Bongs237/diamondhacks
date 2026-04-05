@@ -22,6 +22,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+
 from uagents import Agent, Bureau, Context, Protocol
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement,
@@ -570,19 +571,43 @@ def _route_message(sender: str, text: str) -> str:
     if any(phrase in lower for phrase in ("new group", "new event", "start over", "create")):
         return _start_setup(sender, text)
 
-    # Cancel the entire group
-    if any(word in lower for word in ("cancel", "abort", "delete group", "end group")):
+    # Member dropout: "X dropped out", "X cancelled", "remove X", "drop X"
+    members = groups.get(group_id, [])
+    member_names = [m.get("name", "").lower() for m in members]
+
+    # Check for "<name> dropped out" / "<name> cancelled" / "<name> left"
+    for pattern in (r"(\w+)\s+(dropped out|cancelled|canceled|left|bailed)",
+                    r"remove\s+(\w+)", r"drop\s+(\w+)", r"kick\s+(\w+)"):
+        match = re.search(pattern, lower)
+        if match:
+            name = match.group(1)
+            if name in member_names:
+                return _remove_member(group_id, name)
+
+    # Cancel the entire group (only explicit group-level phrases)
+    if any(phrase in lower for phrase in ("cancel group", "cancel event", "cancel everything",
+                                          "abort group", "delete group", "end group")):
         return _cancel_group(group_id)
 
-    # Remove a member by name (e.g. "remove Alex", "drop Sarah")
-    if lower.startswith("remove ") or lower.startswith("drop ") or lower.startswith("kick "):
-        name = text.split(maxsplit=1)[1].strip() if len(text.split()) > 1 else ""
-        if name:
-            return _remove_member(group_id, name)
-        return "Who should I remove? Say 'remove <name>'."
-
     if any(word in lower for word in ("link", "share", "invite", "url")):
+        meta = group_meta.get(group_id, {})
+        if meta.get("status") == "awaiting_payment" and meta.get("payment"):
+            return f"Payment link:\n{meta['payment']['url']}"
         return f"Share this link with your friends:\n{get_form_link(group_id)}"
+
+    # Payment status
+    if any(word in lower for word in ("payment", "paid", "pay")):
+        meta = group_meta.get(group_id, {})
+        if meta.get("status") == "awaiting_payment":
+            paid = meta.get("payments_received", [])
+            total = len(groups.get(group_id, []))
+            return (
+                f"Payment status: {len(paid)}/{total} members have paid.\n"
+                f"Payment link: {meta.get('payment', {}).get('url', 'N/A')}"
+            )
+        if meta.get("status") == "booked":
+            return "All payments received and tickets have been booked!"
+        return "No payment required yet — pick an event first."
 
     if any(word in lower for word in ("vote", "result", "winner", "pick")):
         vote_result = group_meta.get(group_id, {}).get("vote_result")
@@ -595,23 +620,54 @@ def _route_message(sender: str, text: str) -> str:
             return "Searching for events near your group... this may take a minute."
         return "No vote has been run yet. Send me a list of events to start voting."
 
-    # User picks an event by number
+    # Event info request: "info 3" or "details 5"
     ranked_events = group_meta.get(group_id, {}).get("ranked_events", [])
+    if ranked_events:
+        info_match = re.match(r"(?:info|details|about|tell me about)\s+(\d+)", lower)
+        if info_match:
+            idx = int(info_match.group(1))
+            if 1 <= idx <= len(ranked_events):
+                e = ranked_events[idx - 1]
+                lines = [f"{e['name']}"]
+                if e.get("cost"):
+                    lines.append(f"Cost: ${e['cost']} per person")
+                if e.get("time"):
+                    lines.append(f"Time: {e['time']}")
+                if e.get("venue"):
+                    lines.append(f"Venue: {e['venue']}")
+                if e.get("description"):
+                    lines.append(f"\n{e['description']}")
+                if e.get("booking_url"):
+                    lines.append(f"\nBooking: {e['booking_url']}")
+                lines.append(f"\nReply '{idx}' to pick this event.")
+                return "\n".join(lines)
+            return f"Invalid number. Pick between 1 and {len(ranked_events)}."
+
+    # User picks an event by number
     if ranked_events:
         pick = _extract_number(text)
         if pick and 1 <= pick <= len(ranked_events):
             chosen = ranked_events[pick - 1]
             group_meta[group_id]["chosen_event"] = chosen
-            group_meta[group_id]["status"] = "chosen"
-            booking = chosen.get("booking_url", "")
-            booking_line = f"\nBook here: {booking}" if booking else ""
+            group_meta[group_id]["status"] = "awaiting_payment"
+
+            # Create Stripe payment link
+            from services.stripe_service import create_event_payment_link
+            cost = chosen.get("cost", 0)
+            payment = create_event_payment_link(chosen["name"], cost)
+            group_meta[group_id]["payment"] = payment
+            group_meta[group_id]["payments_received"] = []
+
+            member_count = len(members)
             return (
                 f"Great choice! The group is going to:\n\n"
                 f"{chosen['name']}\n"
-                f"Cost: ${chosen.get('cost', '?')} per person\n"
+                f"Cost: ${cost} per person\n"
                 f"Time: {chosen.get('time', 'TBD')}\n"
-                f"Venue: {chosen.get('venue', '')}"
-                f"{booking_line}"
+                f"Venue: {chosen.get('venue', '')}\n\n"
+                f"Payment link for all {member_count} members:\n"
+                f"{payment['url']}\n\n"
+                f"Once everyone has paid, I'll book the tickets."
             )
 
     summary = _group_status_with_readiness(group_id)

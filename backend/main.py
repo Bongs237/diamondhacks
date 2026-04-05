@@ -13,7 +13,7 @@ import sys
 import threading
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -33,6 +33,7 @@ from agents.orchestrator import (  # noqa: E402
     get_group_summary,
     is_group_full,
     _discovery_queue,
+    _notification_queue,
     _remove_member,
     create_bureau,
 )
@@ -153,6 +154,88 @@ async def user_groups(user_id: str):
                 "vote_result": group_meta.get(gid, {}).get("vote_result"),
             })
     return result
+
+
+@app.post("/api/payment-confirm/{group_id}/{member_name}")
+async def confirm_payment(group_id: str, member_name: str):
+    """Manually confirm a member's payment (for demo/testing).
+
+    In production, this would be triggered by Stripe webhook.
+    """
+    if group_id not in groups:
+        return {"error": "Group not found"}, 404
+
+    meta = group_meta.get(group_id, {})
+    if meta.get("status") != "awaiting_payment":
+        return {"error": "Group is not awaiting payment"}
+
+    paid = meta.setdefault("payments_received", [])
+    if member_name not in paid:
+        paid.append(member_name)
+
+    total = len(groups[group_id])
+    logging.info("Payment confirmed: %s in group %s (%d/%d)", member_name, group_id, len(paid), total)
+
+    # Check if all members have paid
+    if len(paid) >= total:
+        meta["status"] = "booked"
+        logging.info("All payments received for group %s — ready to book", group_id)
+        _notification_queue.append((
+            group_id,
+            f"All {total} members have paid! Tickets are being booked for {meta.get('chosen_event', {}).get('name', 'the event')}.",
+        ))
+
+    return {
+        "status": "confirmed",
+        "member": member_name,
+        "paid_count": len(paid),
+        "total_members": total,
+        "all_paid": len(paid) >= total,
+    }
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events (payment completed)."""
+    import stripe as stripe_lib
+    body = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+
+    if webhook_secret:
+        try:
+            event = stripe_lib.Webhook.construct_event(body, sig, webhook_secret)
+        except Exception as e:
+            logging.warning("Stripe webhook verification failed: %s", e)
+            return {"error": "Invalid signature"}, 400
+    else:
+        import json as _json
+        event = _json.loads(body)
+
+    if event.get("type") == "checkout.session.completed":
+        session = event["data"]["object"]
+        # The payment link ID helps us find which group this is for
+        payment_link_id = session.get("payment_link")
+        customer_email = session.get("customer_details", {}).get("email", "unknown")
+
+        logging.info("Stripe payment received: link=%s email=%s", payment_link_id, customer_email)
+
+        # Find the group with this payment link
+        for gid, meta in group_meta.items():
+            if meta.get("payment", {}).get("payment_link_id") == payment_link_id:
+                paid = meta.setdefault("payments_received", [])
+                paid.append(customer_email)
+                total = len(groups.get(gid, []))
+
+                if len(paid) >= total:
+                    meta["status"] = "booked"
+                    _notification_queue.append((
+                        gid,
+                        f"All {total} members have paid! Booking tickets now.",
+                    ))
+                break
+
+    return {"received": True}
 
 
 @app.get("/health")
