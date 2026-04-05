@@ -295,7 +295,7 @@ export default function Join() {
   return (
     <div className="flex flex-col flex-1 items-center font-sans py-10">
       <h1 className={`${amatic.className} text-7xl font-light pb-7 text-center`}> {/* 7 is my lucky number */}
-        What to Meet or whatever
+        What to Meet
       </h1>
 
       <p className="text-center text-gray-500 pb-5 font-semibold"><strong>Note:</strong> All fields are free response!</p>
