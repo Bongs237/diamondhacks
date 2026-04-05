@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { Amatic_SC } from "next/font/google";
 import router from "next/router";
 import { useParams } from "next/navigation";
@@ -17,7 +17,7 @@ const FIELDS = [
     key: "name",
     label: "What's your name?",
     placeholder: "Name",
-    type: "text" as const,
+    type: "text",
     required: true,
     validate: (v: string) => (v.trim().length === 0 ? "Name is required" : ""),
   },
@@ -25,7 +25,7 @@ const FIELDS = [
     key: "budget",
     label: "What's your budget?",
     placeholder: "$20 - $50, flexible, etc.",
-    type: "text" as const,
+    type: "text",
     required: false,
     validate: () => "",
   },
@@ -33,7 +33,7 @@ const FIELDS = [
     key: "likes",
     label: "What do you like?",
     placeholder: "Comedy, live music, etc.",
-    type: "text" as const,
+    type: "text",
     required: false,
     validate: () => "",
   },
@@ -41,7 +41,7 @@ const FIELDS = [
     key: "dislikes",
     label: "What do you dislike?",
     placeholder: "Improv, etc.",
-    type: "text" as const,
+    type: "text",
     required: false,
     validate: () => "",
   },
@@ -49,7 +49,7 @@ const FIELDS = [
     key: "available_times",
     label: "What times are you available?",
     placeholder: "Saturday evening, Friday night, etc.",
-    type: "text" as const,
+    type: "text",
     required: false,
     validate: () => "",
   },
@@ -57,10 +57,17 @@ const FIELDS = [
     key: "distance",
     label: "What's your max travel distance?",
     placeholder: "5-10 miles",
-    type: "text" as const,
+    type: "text",
     required: false,
     validate: () => "",
   },
+  {
+    key: "location",
+    label: "Where are you?",
+    type: "location",
+    required: true,
+    validate: (v: string) => (v.trim().length === 0 ? "Location is required" : ""),
+  }
 ];
 
 export default function Join() {
@@ -69,8 +76,56 @@ export default function Join() {
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  const [locationCity, setLocationCity] = useState<string>("");
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationError, setLocationError] = useState<string>("");
 
   const { id } = useParams();
+
+  const handleGetLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setLocationError("Geolocation is not supported by your browser");
+      return;
+    }
+    setLocationLoading(true);
+    setLocationError("");
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const { latitude, longitude } = position.coords;
+        const coordStr = `${latitude},${longitude}`;
+        setValues((prev) => ({ ...prev, location: coordStr }));
+        setTouched((prev) => ({ ...prev, location: true }));
+        setErrors((prev) => ({ ...prev, location: "" }));
+        try {
+          const res = await fetch(
+            `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
+            { headers: { "Accept-Language": "en" } }
+          );
+          const data = await res.json();
+          const city =
+            data.address?.city ||
+            data.address?.town ||
+            data.address?.village ||
+            data.address?.county ||
+            "Unknown location";
+          const state = data.address?.state || "";
+          setLocationCity(state ? `${city}, ${state}` : city);
+        } catch {
+          setLocationCity(`${latitude.toFixed(4)}, ${longitude.toFixed(4)}`);
+        }
+        setLocationLoading(false);
+      },
+      (err) => {
+        setLocationLoading(false);
+        setLocationError(
+          err.code === err.PERMISSION_DENIED
+            ? "Location permission denied"
+            : "Unable to get your location"
+        );
+      },
+      { enableHighAccuracy: false, timeout: 10000 }
+    );
+  }, []);
 
   const handleChange = (key: string, raw: string) => {
     let val = raw;
@@ -137,20 +192,61 @@ export default function Join() {
                 {field.label}
                 {field.required && <span className="text-sm font-normal text-red-500 ml-1">*</span>}
               </label>
-              <input
-                type={field.type}
-                placeholder={field.placeholder}
-                className={`border-2 rounded-md p-2 outline-none transition-colors duration-300 hover:shadow-sm ${
-                  errors[field.key] && touched[field.key]
-                    ? "border-red-400 focus:border-red-500"
-                    : "border-gray-300 focus:border-blue-400"
-                }`}
-                value={values[field.key]}
-                onChange={(e) => handleChange(field.key, e.target.value)}
-                onBlur={() => handleBlur(field.key)}
-              />
-              {touched[field.key] && errors[field.key] && (
-                <p className="text-red-500 text-sm">{errors[field.key]}</p>
+              {field.type === "location" ? (
+                <div className="flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={handleGetLocation}
+                    disabled={locationLoading}
+                    className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md p-3 text-gray-600 hover:border-blue-400 hover:text-blue-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {locationLoading ? (
+                      <>
+                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Getting location...
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+                        </svg>
+                        {locationCity ? "Update my location" : "Get my location"}
+                      </>
+                    )}
+                  </button>
+                  {locationCity && (
+                    <p className="text-sm text-green-700 font-medium text-center">
+                      {locationCity}
+                    </p>
+                  )}
+                  {locationError && (
+                    <p className="text-red-500 text-sm">{locationError}</p>
+                  )}
+                  {touched[field.key] && errors[field.key] && !locationError && (
+                    <p className="text-red-500 text-sm">{errors[field.key]}</p>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <input
+                    type={field.type}
+                    placeholder={field.placeholder}
+                    className={`border-2 rounded-md p-2 outline-none transition-colors duration-300 hover:shadow-sm ${
+                      errors[field.key] && touched[field.key]
+                        ? "border-red-400 focus:border-red-500"
+                        : "border-gray-300 focus:border-blue-400"
+                    }`}
+                    value={values[field.key]}
+                    onChange={(e) => handleChange(field.key, e.target.value)}
+                    onBlur={() => handleBlur(field.key)}
+                  />
+                  {touched[field.key] && errors[field.key] && (
+                    <p className="text-red-500 text-sm">{errors[field.key]}</p>
+                  )}
+                </>
               )}
             </div>
           ))}
