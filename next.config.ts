@@ -5,10 +5,10 @@ const nextConfig: NextConfig = {
   rewrites: async () => [
     {
       source: "/api/:path*",
-      destination: "http://localhost:8000/api/:path*",
+      destination: `${process.env.BACKEND_URL}/api/:path*`,
     },
   ],
-  allowedDevOrigins: [process.env.NGROK_URL || ""],
+  allowedDevOrigins: [process.env.NGROK_DOMAIN || ""],
 };
 
 export default nextConfig;
