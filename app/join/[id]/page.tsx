@@ -10,9 +10,18 @@ const amatic = Amatic_SC({
   weight: ["400", "700"],
 });
 
+type Field = {
+  key: string;
+  label: string;
+  placeholder: string | undefined;
+  type: string;
+  required: boolean;
+  validate: (v: any) => string;
+}
+
 // Data driven type stuff ong fr
 // When form submitted each key is json key, value is what you put in the form
-const FIELDS = [
+const FIELDS: Field[] = [
   {
     key: "name",
     label: "What's your name?",
@@ -66,12 +75,13 @@ const FIELDS = [
     label: "Where are you?",
     type: "location",
     required: true,
+    placeholder: undefined,
     validate: (v: number[]) => (v.length === 0 ? "Location is required" : ""),
   }
 ];
 
 export default function Join() {
-  const [values, setValues] = useState<Record<string, string | number[]>>(
+  const [values, setValues] = useState<Record<string, any>>(
     Object.fromEntries(FIELDS.map((f) => [f.key, ""]))
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -129,12 +139,11 @@ export default function Join() {
     );
   }, []);
 
-  const handleChange = (key: string, raw: string) => {
-    let val = raw;
-    setValues((prev) => ({ ...prev, [key]: val }));
+  const handleChange = (key: string, raw: any) => {
+    setValues((prev) => ({ ...prev, [key]: raw }));
     if (touched[key]) {
       const field = FIELDS.find((f) => f.key === key)!;
-      setErrors((prev) => ({ ...prev, [key]: field.validate(val) }));
+      setErrors((prev) => ({ ...prev, [key]: field.validate(raw) }));
     }
   };
 
