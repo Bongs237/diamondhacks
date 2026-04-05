@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
       destination: "http://localhost:8000/api/:path*",
     },
   ],
+  allowedDevOrigins: [process.env.NGROK_URL || ""],
 };
 
 export default nextConfig;
