@@ -521,13 +521,16 @@ async def _handle_booking_response(group_id: str, payload: dict):
             await _send_async_update(group_id, msg)
 
         elif status == "checkout_ready":
-            meta["status"] = "needs_payment"
-            msg = f"Booking for {chosen.get('name', 'the event')} is at checkout!\n\n{detail}"
-            if cart_url:
-                msg += f"\n\nComplete checkout here: {cart_url}"
             if live_url:
-                msg += f"\n\nWatch/continue in browser: {live_url}"
-            await _send_async_update(group_id, msg)
+                meta["status"] = "needs_payment"
+                msg = f"Booking for {chosen.get('name', 'the event')} is at checkout!\n\n{detail}"
+                msg += f"\n\nComplete checkout here: {live_url}"
+                msg += "\n\nSay 'done booking' when you're finished."
+                await _send_async_update(group_id, msg)
+            else:
+                meta["status"] = "booking_failed"
+                msg = f"Booking failed — could not get a live browser session for {chosen.get('name', 'the event')}."
+                await _send_async_update(group_id, msg)
 
         elif status == "blocked":
             reason = result.get("human_required_reason", "unknown")
@@ -537,6 +540,7 @@ async def _handle_booking_response(group_id: str, payload: dict):
                 msg += f"\n\nContinue in browser: {live_url}"
             else:
                 msg += f"\n\nBook manually: {chosen.get('booking_url', 'N/A')}"
+            msg += "\n\nSay 'done booking' when you're finished."
             msg += f"\nParty size: {len(groups.get(group_id, []))}"
             await _send_async_update(group_id, msg)
 

@@ -169,6 +169,7 @@ async def _book_from_json(data: dict, ctx: Context = None, sender: str = None) -
         "live_url": getattr(result, "_live_url", None) or live_url_holder.get("url"),
         "session_id": getattr(result, "_session_id", None),
     }
+    return response
 
 
 # ---------------------------------------------------------------------------
