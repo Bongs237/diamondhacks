@@ -8,6 +8,7 @@
     "frontend:start": "next start",
     "frontend:lint": "eslint",
     "backend:dev": "cd backend && .venv/bin/python main.py",
+    "stripe:dev": "stripe listen --forward-to localhost:8000/webhooks/stripe",
     "dev": "concurrently \"npm run frontend:dev\" \"npm run backend:dev\""
   },
   "dependencies": {

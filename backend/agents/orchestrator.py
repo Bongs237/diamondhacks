@@ -554,9 +554,116 @@ async def _start_voting(ctx: Context, sender: str, group_id: str, events: list[d
 # Message routing
 # ---------------------------------------------------------------------------
 
-def _route_message(sender: str, text: str) -> str:
-    lower = text.lower().strip()
+INTENT_SYSTEM_PROMPT = """You are an intent parser for EventPulse, a group event planning app.
+Given a user message and context about the current group state, return ONLY a JSON object with:
+- "intent": one of: "status", "new_group", "remove_member", "cancel_group", "get_link", "payment_status", "view_results", "event_info", "pick_event", "unknown"
+- "number": integer if the user references an event number or group size. "the winner" or "first one" = 1. Otherwise null.
+- "name": string if the user mentions a person's name, otherwise null
 
+Key rules:
+- "the winner", "winning event", "first one", "top pick" = event_info with number 1
+- "elaborate", "details", "more info", "tell me about" = event_info
+- If the user asks about a specific event by name, match it to its number from the context
+- A bare number like "3" = pick_event (they're choosing it)
+- "what about 3" or "more on 3" = event_info (they want details)
+- Any mention of "paid", "pay", "payment", "who paid", "how many paid", "did everyone pay" = payment_status
+- "status" without payment context = status (group member info)
+
+Return ONLY the JSON object, no explanation."""
+
+
+def _build_intent_context(group_id: str) -> str:
+    """Build context string about the group state for the LLM."""
+    meta = group_meta.get(group_id, {})
+    members = groups.get(group_id, [])
+    status = meta.get("status", "unknown")
+    lines = [f"Group status: {status}"]
+    lines.append(f"Members: {', '.join(m.get('name', '?') for m in members)}")
+
+    if status == "awaiting_payment":
+        paid = meta.get("payments_received", [])
+        lines.append(f"Payment: {len(paid)}/{len(members)} members have paid")
+
+    ranked = meta.get("ranked_events", [])
+    if ranked:
+        lines.append("Events (numbered):")
+        for i, e in enumerate(ranked, 1):
+            lines.append(f"  {i}. {e.get('name', '?')} — ${e.get('cost', '?')}")
+
+    return "\n".join(lines)
+
+
+def _parse_intent(text: str, group_id: str | None = None) -> dict:
+    """Use LLM to parse user intent with group context. Falls back to keyword matching."""
+    # Quick pre-check for obvious intents (saves an LLM call)
+    lower = text.lower().strip()
+    if any(w in lower for w in ("paid", "pay", "payment")):
+        return {"intent": "payment_status", "number": None, "name": None}
+
+    import requests as http_requests
+
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return _parse_intent_fallback(text)
+
+    context = ""
+    if group_id:
+        context = f"\n\nCurrent group context:\n{_build_intent_context(group_id)}"
+
+    try:
+        resp = http_requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-sonnet-4-6-20250514",
+                "max_tokens": 100,
+                "system": INTENT_SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": text + context}],
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            raw = resp.json()["content"][0]["text"].strip()
+            return json.loads(raw)
+    except Exception as e:
+        logger.warning("LLM intent parse failed: %s", e)
+
+    return _parse_intent_fallback(text)
+
+
+def _parse_intent_fallback(text: str) -> dict:
+    """Keyword-based fallback when LLM is unavailable."""
+    lower = text.lower().strip()
+    number = _extract_number(text)
+
+    # Payment check BEFORE status (since "how many paid" contains "how many")
+    if any(w in lower for w in ("paid", "pay", "payment")):
+        return {"intent": "payment_status", "number": None, "name": None}
+    if any(w in lower for w in ("status", "who", "how many", "members", "update")):
+        return {"intent": "status", "number": None, "name": None}
+    if any(w in lower for w in ("new group", "new event", "start over", "create")):
+        return {"intent": "new_group", "number": number, "name": None}
+    if any(w in lower for w in ("cancel group", "cancel event", "abort", "delete group")):
+        return {"intent": "cancel_group", "number": None, "name": None}
+    if any(w in lower for w in ("link", "share", "invite", "url")):
+        return {"intent": "get_link", "number": None, "name": None}
+    if any(w in lower for w in ("payment", "paid", "pay")):
+        return {"intent": "payment_status", "number": None, "name": None}
+    if any(w in lower for w in ("vote", "result", "winner")):
+        return {"intent": "view_results", "number": None, "name": None}
+    if any(w in lower for w in ("info", "detail", "about", "more", "tell me")):
+        return {"intent": "event_info", "number": number, "name": None}
+    if number is not None:
+        return {"intent": "pick_event", "number": number, "name": None}
+
+    return {"intent": "unknown", "number": None, "name": None}
+
+
+def _route_message(sender: str, text: str) -> str:
     if sender in _pending_setup:
         return _handle_setup(sender, text)
 
@@ -564,39 +671,36 @@ def _route_message(sender: str, text: str) -> str:
         return _start_setup(sender, text)
 
     group_id = _session_groups[sender]
+    intent = _parse_intent(text, group_id)
+    action = intent.get("intent", "unknown")
+    number = intent.get("number")
+    name = intent.get("name")
 
-    if any(word in lower for word in ("status", "who", "how many", "members", "update")):
+    logger.info("Intent: %s (number=%s, name=%s)", action, number, name)
+
+    if action == "status":
         return _group_status_with_readiness(group_id)
 
-    if any(phrase in lower for phrase in ("new group", "new event", "start over", "create")):
+    if action == "new_group":
         return _start_setup(sender, text)
 
-    # Member dropout: "X dropped out", "X cancelled", "remove X", "drop X"
-    members = groups.get(group_id, [])
-    member_names = [m.get("name", "").lower() for m in members]
+    if action == "remove_member":
+        if name:
+            return _remove_member(group_id, name)
+        return "Who should I remove? Say something like 'remove Alex'."
 
-    # Check for "<name> dropped out" / "<name> cancelled" / "<name> left"
-    for pattern in (r"(\w+)\s+(dropped out|cancelled|canceled|left|bailed)",
-                    r"remove\s+(\w+)", r"drop\s+(\w+)", r"kick\s+(\w+)"):
-        match = re.search(pattern, lower)
-        if match:
-            name = match.group(1)
-            if name in member_names:
-                return _remove_member(group_id, name)
-
-    # Cancel the entire group (only explicit group-level phrases)
-    if any(phrase in lower for phrase in ("cancel group", "cancel event", "cancel everything",
-                                          "abort group", "delete group", "end group")):
+    if action == "cancel_group":
         return _cancel_group(group_id)
 
-    if any(word in lower for word in ("link", "share", "invite", "url")):
+    if action == "get_link":
         meta = group_meta.get(group_id, {})
         if meta.get("status") == "awaiting_payment" and meta.get("payment"):
             return f"Payment link:\n{meta['payment']['url']}"
+        if is_group_full(group_id):
+            return "The group is already full — no more members can join."
         return f"Share this link with your friends:\n{get_form_link(group_id)}"
 
-    # Payment status
-    if any(word in lower for word in ("payment", "paid", "pay")):
+    if action == "payment_status":
         meta = group_meta.get(group_id, {})
         if meta.get("status") == "awaiting_payment":
             paid = meta.get("payments_received", [])
@@ -609,25 +713,13 @@ def _route_message(sender: str, text: str) -> str:
             return "All payments received and tickets have been booked!"
         return "No payment required yet — pick an event first."
 
-    if any(word in lower for word in ("vote", "result", "winner", "pick")):
-        vote_result = group_meta.get(group_id, {}).get("vote_result")
-        if vote_result:
-            return vote_result.get("clean_summary", vote_result["summary"])
-        status = group_meta.get(group_id, {}).get("status", "")
-        if status == "voting":
-            return "Voting is in progress — agents are still scoring. Ask again in a moment."
-        if status == "discovering":
-            return "Searching for events near your group... this may take a minute."
-        return "No vote has been run yet. Send me a list of events to start voting."
-
-    # Event info request: "info 3" or "details 5"
-    ranked_events = group_meta.get(group_id, {}).get("ranked_events", [])
-    if ranked_events:
-        info_match = re.match(r"(?:info|details|about|tell me about)\s+(\d+)", lower)
-        if info_match:
-            idx = int(info_match.group(1))
-            if 1 <= idx <= len(ranked_events):
-                e = ranked_events[idx - 1]
+    if action == "view_results":
+        # Check if user actually wants details on the winner, not just the list
+        lower = text.lower()
+        if any(w in lower for w in ("more", "detail", "elaborate", "info", "about", "tell me")):
+            ranked_events = group_meta.get(group_id, {}).get("ranked_events", [])
+            if ranked_events:
+                e = ranked_events[0]
                 lines = [f"{e['name']}"]
                 if e.get("cost"):
                     lines.append(f"Cost: ${e['cost']} per person")
@@ -639,40 +731,84 @@ def _route_message(sender: str, text: str) -> str:
                     lines.append(f"\n{e['description']}")
                 if e.get("booking_url"):
                     lines.append(f"\nBooking: {e['booking_url']}")
-                lines.append(f"\nReply '{idx}' to pick this event.")
+                lines.append(f"\nReply '1' to pick this event.")
                 return "\n".join(lines)
-            return f"Invalid number. Pick between 1 and {len(ranked_events)}."
 
-    # User picks an event by number
-    if ranked_events:
-        pick = _extract_number(text)
-        if pick and 1 <= pick <= len(ranked_events):
-            chosen = ranked_events[pick - 1]
+        vote_result = group_meta.get(group_id, {}).get("vote_result")
+        if vote_result:
+            return vote_result.get("clean_summary", vote_result["summary"])
+        status = group_meta.get(group_id, {}).get("status", "")
+        if status == "voting":
+            return "Voting is in progress — agents are still scoring. Ask again in a moment."
+        if status == "discovering":
+            return "Searching for events near your group... this may take a minute."
+        return "No vote has been run yet. Send me a list of events to start voting."
+
+    if action == "event_info":
+        ranked_events = group_meta.get(group_id, {}).get("ranked_events", [])
+        if ranked_events and number and 1 <= number <= len(ranked_events):
+            e = ranked_events[number - 1]
+            lines = [f"{e['name']}"]
+            if e.get("cost"):
+                lines.append(f"Cost: ${e['cost']} per person")
+            if e.get("time"):
+                lines.append(f"Time: {e['time']}")
+            if e.get("venue"):
+                lines.append(f"Venue: {e['venue']}")
+            if e.get("description"):
+                lines.append(f"\n{e['description']}")
+            if e.get("booking_url"):
+                lines.append(f"\nBooking: {e['booking_url']}")
+            lines.append(f"\nReply '{number}' to pick this event.")
+            return "\n".join(lines)
+        if not ranked_events:
+            return "No events to show yet."
+        return f"Invalid number. Pick between 1 and {len(ranked_events)}."
+
+    if action == "pick_event":
+        ranked_events = group_meta.get(group_id, {}).get("ranked_events", [])
+        if ranked_events and number and 1 <= number <= len(ranked_events):
+            chosen = ranked_events[number - 1]
             group_meta[group_id]["chosen_event"] = chosen
-            group_meta[group_id]["status"] = "awaiting_payment"
-
-            # Create Stripe payment link
-            from services.stripe_service import create_event_payment_link
             cost = chosen.get("cost", 0)
-            payment = create_event_payment_link(chosen["name"], cost)
-            group_meta[group_id]["payment"] = payment
-            group_meta[group_id]["payments_received"] = []
+            member_count = len(groups.get(group_id, []))
 
-            member_count = len(members)
-            return (
+            confirmation = (
                 f"Great choice! The group is going to:\n\n"
                 f"{chosen['name']}\n"
-                f"Cost: ${cost} per person\n"
+                f"Cost: {'Free' if cost == 0 else f'${cost} per person'}\n"
                 f"Time: {chosen.get('time', 'TBD')}\n"
-                f"Venue: {chosen.get('venue', '')}\n\n"
-                f"Payment link for all {member_count} members:\n"
-                f"{payment['url']}\n\n"
-                f"Once everyone has paid, I'll book the tickets."
+                f"Venue: {chosen.get('venue', '')}"
             )
 
+            if cost > 0:
+                from services.stripe_service import create_event_payment_link
+                payment = create_event_payment_link(chosen["name"], cost)
+                group_meta[group_id]["payment"] = payment
+                group_meta[group_id]["payments_received"] = []
+                group_meta[group_id]["status"] = "awaiting_payment"
+                confirmation += (
+                    f"\n\nPayment link for all {member_count} members:\n"
+                    f"{payment['url']}\n\n"
+                    f"Once everyone has paid, I'll book the tickets."
+                )
+            else:
+                group_meta[group_id]["status"] = "booked"
+                booking = chosen.get("booking_url", "")
+                if booking:
+                    confirmation += f"\n\nBooking: {booking}"
+                confirmation += "\n\nNo payment needed — it's free! Have fun!"
+
+            return confirmation
+        if not ranked_events:
+            return "No events to pick from yet."
+        return f"Invalid number. Pick between 1 and {len(ranked_events)}."
+
+    # Unknown intent — show status
     summary = _group_status_with_readiness(group_id)
-    link = get_form_link(group_id)
-    return f"{summary}\n\nShare this link to invite more friends:\n{link}"
+    if not is_group_full(group_id):
+        summary += f"\n\nShare this link to invite more friends:\n{get_form_link(group_id)}"
+    return summary
 
 
 def _start_setup(sender: str, text: str) -> str:

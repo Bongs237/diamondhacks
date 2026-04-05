@@ -179,7 +179,7 @@ Quorum failure: release all holds, cancel
 - Pydantic (models)
 - In-memory dicts (state — no database for hackathon)
 
-## File Structure (Backend Only — do not touch app/ directory)
+## File Structure
 
 ```
 backend/
@@ -258,5 +258,5 @@ Judges use ASI:One chat UI for demo. Twilio SMS is the product experience shown 
 - Stripe in test mode — use test API keys and test card numbers
 - In-memory state (dicts keyed by session/group ID) — no database
 - Keep agent count at 7 unique (12 instances). Do not add agents that should be functions.
-- NEVER touch files in the app/ directory. Frontend is owned by another team member.
-- API routes in backend/api/routes/ expose JSON endpoints that the frontend consumes. Coordinate on the contract (request/response shapes) but don't write frontend code.
+- Frontend (app/ directory) is fair game — polish the UI as needed.
+- API routes in backend/api/routes/ expose JSON endpoints that the frontend consumes.

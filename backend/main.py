@@ -94,6 +94,9 @@ async def join_group(group_id: str, form: JoinForm):
     if group_id not in groups:
         raise HTTPException(status_code=404, detail="Group not found")
 
+    if is_group_full(group_id):
+        raise HTTPException(status_code=400, detail="Group is already full")
+
     profile = form.model_dump()
     count = add_member(group_id, profile)
     logging.info("Form: %s joined group %s (%d members)", form.name, group_id, count)
@@ -216,11 +219,14 @@ async def stripe_webhook(request: Request):
         import json as _json
         event = _json.loads(body)
 
-    if event.get("type") == "checkout.session.completed":
-        session = event["data"]["object"]
-        # The payment link ID helps us find which group this is for
-        payment_link_id = session.get("payment_link")
-        customer_email = session.get("customer_details", {}).get("email", "unknown")
+    event_type = event["type"] if isinstance(event, dict) else event.type
+    if event_type == "checkout.session.completed":
+        session = event["data"]["object"] if isinstance(event, dict) else event.data.object
+        payment_link_id = session.get("payment_link") if isinstance(session, dict) else getattr(session, "payment_link", None)
+        if isinstance(session, dict):
+            customer_email = session.get("customer_details", {}).get("email", "unknown")
+        else:
+            customer_email = getattr(getattr(session, "customer_details", None), "email", "unknown")
 
         logging.info("Stripe payment received: link=%s email=%s", payment_link_id, customer_email)
 
