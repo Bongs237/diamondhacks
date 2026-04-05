@@ -66,12 +66,12 @@ const FIELDS = [
     label: "Where are you?",
     type: "location",
     required: true,
-    validate: (v: string) => (v.trim().length === 0 ? "Location is required" : ""),
+    validate: (v: number[]) => (v.length === 0 ? "Location is required" : ""),
   }
 ];
 
 export default function Join() {
-  const [values, setValues] = useState<Record<string, string>>(
+  const [values, setValues] = useState<Record<string, string | number[]>>(
     Object.fromEntries(FIELDS.map((f) => [f.key, ""]))
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -89,14 +89,16 @@ export default function Join() {
     }
     setLocationLoading(true);
     setLocationError("");
+
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        const coordStr = `${latitude},${longitude}`;
-        setValues((prev) => ({ ...prev, location: coordStr }));
+        setValues((prev) => ({ ...prev, location: [latitude, longitude] }));
+
         setTouched((prev) => ({ ...prev, location: true }));
         setErrors((prev) => ({ ...prev, location: "" }));
         try {
+          // Use openstreetmap to get the actual location names
           const res = await fetch(
             `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json`,
             { headers: { "Accept-Language": "en" } }
