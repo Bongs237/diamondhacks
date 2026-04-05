@@ -66,8 +66,10 @@ _pending_votes: dict[str, dict] = {}
 _discovery_triggered: dict[str, bool] = {}
 
 # Store the ASI:One session info so we can send async updates
-# sender_address → {"session": uuid, "last_ctx": Context}
 _asi_sessions: dict[str, dict] = {}
+
+# Queue for async notifications (consumed by agent interval)
+_notification_queue: list[tuple[str, str]] = []  # [(group_id, message), ...]
 
 # ---------------------------------------------------------------------------
 # Group + profile logic
@@ -150,9 +152,20 @@ def _build_discovery_payload(group_id: str) -> dict:
     times = [t for t in times if t and "all" not in t.lower()]
     when = times[0] if times else None
 
+    # Build categories from all members' likes
+    categories = set()
+    for m in members:
+        likes = m.get("likes", "")
+        if isinstance(likes, list):
+            categories.update(l.lower().strip() for l in likes)
+        elif likes:
+            for item in likes.split(","):
+                categories.add(item.lower().strip())
+
     return {
         "locations": locations,
         "when": when,
+        "categories": list(categories) if categories else [],
         "max_steps": 25,
     }
 
@@ -185,11 +198,14 @@ _discovery_queue: list[str] = []
 
 
 @agent.on_interval(period=2.0)
-async def check_discovery_queue(ctx: Context):
-    """Poll for groups that are full and need discovery triggered."""
+async def check_queues(ctx: Context):
+    """Poll for pending discovery triggers and notifications."""
     while _discovery_queue:
         group_id = _discovery_queue.pop(0)
         await trigger_discovery(ctx, group_id)
+    while _notification_queue:
+        group_id, message = _notification_queue.pop(0)
+        await _send_async_update(group_id, message)
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +684,9 @@ def _remove_member(group_id: str, name: str) -> str:
 
     logger.info("Removed %s from group %s (%d remaining)", actual_name, group_id, len(members))
 
+    # Queue async notification to organizer
+    _notification_queue.append((group_id, f"{actual_name} dropped out of the group. ({len(members)} members remaining)"))
+
     # If voting already happened, re-run with remaining members
     meta = group_meta.get(group_id, {})
     if meta.get("status") == "voted" and meta.get("vote_result"):
@@ -694,6 +713,9 @@ def _remove_member(group_id: str, name: str) -> str:
             meta["vote_result"] = result
             meta["ranked_events"] = [r["event"] for r in result["rankings"]]
             meta["vote_result"]["clean_summary"] = result["summary"] + "\n\nReply with a number to pick a different event."
+
+            # Update the notification with re-voted results
+            _notification_queue.append((group_id, f"Voting re-ran without {actual_name}.\n\n{result['summary']}"))
 
             return (
                 f"Removed {actual_name}. Re-ran voting with {len(members)} remaining member(s).\n\n"
