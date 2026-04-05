@@ -7,7 +7,7 @@
     "frontend:build": "next build",
     "frontend:start": "next start",
     "frontend:lint": "eslint",
-    "backend:dev": "uvicorn main:app --reload --app-dir backend",
+    "backend:dev": "cd backend && .venv/bin/python main.py",
     "dev": "concurrently \"npm run frontend:dev\" \"npm run backend:dev\""
   },
   "dependencies": {
