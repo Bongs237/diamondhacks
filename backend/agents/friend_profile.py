@@ -14,7 +14,6 @@ from uagents import Agent, Context, Model
 
 logger = logging.getLogger(__name__)
 
-
 # ---------------------------------------------------------------------------
 # Message schemas for orchestrator ↔ friend agent communication
 # ---------------------------------------------------------------------------
@@ -76,18 +75,15 @@ def score_event(event: dict, profile: dict) -> dict:
       likes: "comedy" or ["comedy", "live-music"]
       dislikes: "improv" or ["improv"]
 
-    Hard vetoes (score = -999):
-      - cost > budget (upper bound of range)
-      - time mismatch (unless "all the time" / empty)
-
-    Soft scoring:
+    Scoring:
       +3  category in likes
       -5  category in dislikes
       +2  cost ≤ budget
+      -1 per $10 over budget (penalty, not veto)
+      -3  time mismatch (penalty, not veto)
     """
     score = 0
     reasons = []
-    vetoed = False
 
     event_cost = event.get("cost", 0)
     event_category = event.get("category", "").lower()
@@ -98,21 +94,23 @@ def score_event(event: dict, profile: dict) -> dict:
     likes = _parse_list(profile.get("likes", ""))
     dislikes = _parse_list(profile.get("dislikes", ""))
 
-    # Budget veto
-    if event_cost > budget:
-        vetoed = True
-        reasons.append(f"over budget (${event_cost} > ${budget})")
+    # Budget: bonus if under, penalty if over (-1 per $10 over)
+    if event_cost <= budget:
+        score += 2
+        reasons.append(f"within budget (+2)")
+    else:
+        over = event_cost - budget
+        penalty = -max(1, int(over / 10))
+        score += penalty
+        reasons.append(f"${over:.0f} over budget ({penalty})")
 
-    # Time veto — skip if "all the time" or empty (no constraint)
+    # Time: penalty if mismatch (not veto)
     no_time_constraint = not pref_time or "all" in pref_time
     if not no_time_constraint and event_time and event_time != pref_time:
-        vetoed = True
-        reasons.append(f"time conflict ({event_time} vs {pref_time})")
+        score -= 3
+        reasons.append(f"time mismatch ({event_time} vs {pref_time}) (-3)")
 
-    if vetoed:
-        return {"event_name": event["name"], "score": -999, "vetoed": True, "reasons": reasons}
-
-    # Soft scoring
+    # Category likes/dislikes
     if event_category in likes:
         score += 3
         reasons.append(f"likes {event_category} (+3)")
@@ -120,10 +118,6 @@ def score_event(event: dict, profile: dict) -> dict:
     if event_category in dislikes:
         score -= 5
         reasons.append(f"dislikes {event_category} (-5)")
-
-    if event_cost <= budget:
-        score += 2
-        reasons.append(f"within budget (+2)")
 
     return {"event_name": event["name"], "score": score, "vetoed": False, "reasons": reasons}
 

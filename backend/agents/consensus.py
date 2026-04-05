@@ -100,15 +100,15 @@ def _run_consensus(all_votes: list[dict], events: list[dict]) -> dict:
     # Build summary
     lines = []
     if winner:
-        lines.append(f"Winner: {winner['name']} (score: {rankings[0]['total_score']})")
-        lines.append(f"  Cost: ${winner.get('cost', '?')} | Time: {winner.get('time', '?')}")
+        lines.append(f"1. Winner: {winner['name']} (score: {rankings[0]['total_score']})")
+        lines.append(f"   Cost: ${winner.get('cost', '?')} | Time: {winner.get('time', '?')}")
     else:
         lines.append("No events survived — every option was vetoed by at least one member.")
 
     if len(rankings) > 1:
-        lines.append("\nRunner-ups:")
-        for r in rankings[1:]:
-            lines.append(f"  - {r['event']['name']} (score: {r['total_score']})")
+        lines.append("\nOther options:")
+        for i, r in enumerate(rankings[1:], start=2):
+            lines.append(f"  {i}. {r['event']['name']} (score: {r['total_score']})")
 
     if vetoed_list:
         lines.append(f"\nVetoed ({len(vetoed_list)}):")
