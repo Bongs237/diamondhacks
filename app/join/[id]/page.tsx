@@ -71,6 +71,99 @@ const FIELDS: Field[] = [
   }
 ];
 
+function LocationField({
+  field,
+  locationCity,
+  locationLoading,
+  locationError,
+  touched,
+  errors,
+  onGetLocation,
+}: {
+  field: Field;
+  locationCity: string;
+  locationLoading: boolean;
+  locationError: string;
+  touched: Record<string, boolean>;
+  errors: Record<string, string>;
+  onGetLocation: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <button
+        type="button"
+        onClick={onGetLocation}
+        disabled={locationLoading}
+        className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md p-3 text-gray-600 hover:border-blue-400 hover:text-blue-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {locationLoading ? (
+          <>
+            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Getting location...
+          </>
+        ) : (
+          <>
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
+            </svg>
+            {locationCity ? "Update my location" : "Get my location"}
+          </>
+        )}
+      </button>
+      {locationCity && (
+        <p className="text-sm text-green-700 font-medium text-center">
+          {locationCity}
+        </p>
+      )}
+      {locationError && (
+        <p className="text-red-500 text-sm">{locationError}</p>
+      )}
+      {touched[field.key] && errors[field.key] && !locationError && (
+        <p className="text-red-500 text-sm">{errors[field.key]}</p>
+      )}
+    </div>
+  );
+}
+
+function TextField({
+  field,
+  value,
+  touched,
+  error,
+  onChange,
+  onBlur,
+}: {
+  field: Field;
+  value: string;
+  touched: boolean;
+  error: string;
+  onChange: (key: string, value: string) => void;
+  onBlur: (key: string) => void;
+}) {
+  return (
+    <>
+      <input
+        type={field.type}
+        placeholder={field.placeholder}
+        className={`border-2 rounded-md p-2 outline-none transition-colors duration-300 hover:shadow-sm ${
+          error && touched
+            ? "border-red-400 focus:border-red-500"
+            : "border-gray-300 focus:border-blue-400"
+        }`}
+        value={value}
+        onChange={(e) => onChange(field.key, e.target.value)}
+        onBlur={() => onBlur(field.key)}
+      />
+      {touched && error && (
+        <p className="text-red-500 text-sm">{error}</p>
+      )}
+    </>
+  );
+}
+
 export default function Join() {
   const [values, setValues] = useState<Record<string, any>>(
     Object.fromEntries(FIELDS.map((f) => [f.key, ""]))
@@ -163,7 +256,12 @@ export default function Join() {
     const response = await fetch(`/api/submit/${id}`, {
       method: "POST",
       body: JSON.stringify(values),
+      headers: {
+        "Content-Type": "application/json", // Make sure you set the content type (bruh)
+      },
     });
+
+    console.log(values)
 
     if (!response.ok) {
       throw new Error("Failed to join event");
@@ -192,60 +290,24 @@ export default function Join() {
                 {field.required && <span className="text-sm font-normal text-red-500 ml-1">*</span>}
               </label>
               {field.type === "location" ? (
-                <div className="flex flex-col gap-2">
-                  <button
-                    type="button"
-                    onClick={handleGetLocation}
-                    disabled={locationLoading}
-                    className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md p-3 text-gray-600 hover:border-blue-400 hover:text-blue-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {locationLoading ? (
-                      <>
-                        <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                        </svg>
-                        Getting location...
-                      </>
-                    ) : (
-                      <>
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-                        </svg>
-                        {locationCity ? "Update my location" : "Get my location"}
-                      </>
-                    )}
-                  </button>
-                  {locationCity && (
-                    <p className="text-sm text-green-700 font-medium text-center">
-                      {locationCity}
-                    </p>
-                  )}
-                  {locationError && (
-                    <p className="text-red-500 text-sm">{locationError}</p>
-                  )}
-                  {touched[field.key] && errors[field.key] && !locationError && (
-                    <p className="text-red-500 text-sm">{errors[field.key]}</p>
-                  )}
-                </div>
+                <LocationField
+                  field={field}
+                  locationCity={locationCity}
+                  locationLoading={locationLoading}
+                  locationError={locationError}
+                  touched={touched}
+                  errors={errors}
+                  onGetLocation={handleGetLocation}
+                />
               ) : (
-                <>
-                  <input
-                    type={field.type}
-                    placeholder={field.placeholder}
-                    className={`border-2 rounded-md p-2 outline-none transition-colors duration-300 hover:shadow-sm ${
-                      errors[field.key] && touched[field.key]
-                        ? "border-red-400 focus:border-red-500"
-                        : "border-gray-300 focus:border-blue-400"
-                    }`}
-                    value={values[field.key]}
-                    onChange={(e) => handleChange(field.key, e.target.value)}
-                    onBlur={() => handleBlur(field.key)}
-                  />
-                  {touched[field.key] && errors[field.key] && (
-                    <p className="text-red-500 text-sm">{errors[field.key]}</p>
-                  )}
-                </>
+                <TextField
+                  field={field}
+                  value={values[field.key]}
+                  touched={!!touched[field.key]}
+                  error={errors[field.key] || ""}
+                  onChange={handleChange}
+                  onBlur={handleBlur}
+                />
               )}
             </div>
           ))}

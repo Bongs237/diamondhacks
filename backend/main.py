@@ -103,8 +103,12 @@ async def health():
     }
 
 @app.post("/api/submit/{id}")
-async def submit(id: str):
-    print("yeah")
+async def submit(id: str, form: JoinForm):
+    if id not in groups:
+        groups[id] = []
+
+    groups[id].append(form.model_dump()) # convert class to dict
+    print(groups)
     return {"message": "Join request submitted"}
 
 # ---------------------------------------------------------------------------
