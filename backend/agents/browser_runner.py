@@ -161,6 +161,7 @@ async def run_activity_discovery(
     result = await client.run(
         _discovery_task(members=members, when=when),
         output_schema=ActivityDiscoveryResult,
+        model="bu-max",
     )
     if result.output is not None:
         if isinstance(result.output, ActivityDiscoveryResult):
@@ -341,28 +342,43 @@ async def run_event_booking(
     if on_live_url:
         on_live_url(session.live_url)
 
-    try:
-        result = await client.run(
-            _booking_task(
-                booking_url=booking_url,
-                event_title=event_title,
-                when=when,
-                party_size=party_size,
-                allow_payment=allow_payment,
-                notes=notes,
-            ),
-            output_schema=BookingResult,
-            session_id=session.id,
-        )
-    finally:
-        await client.sessions.stop(session.id)
+    result = await client.run(
+        _booking_task(
+            booking_url=booking_url,
+            event_title=event_title,
+            when=when,
+            party_size=party_size,
+            allow_payment=allow_payment,
+            notes=notes,
+        ),
+        output_schema=BookingResult,
+        session_id=session.id,
+    )
 
     if result.output is not None:
-        if isinstance(result.output, BookingResult):
-            return result.output
-        return BookingResult.model_validate(result.output)
-    return BookingResult(
-        status="blocked",
-        detail="Agent finished without structured output; check logs.",
-        human_required_reason="retry_or_inspect_browser_session",
-    )
+        output = result.output if isinstance(result.output, BookingResult) else BookingResult.model_validate(result.output)
+    else:
+        output = BookingResult(
+            status="checkout_ready",
+            detail="Agent finished navigating. Browser session is still open for you to complete checkout.",
+            human_required_reason="payment",
+        )
+
+    # Only stop session if booking completed — otherwise leave alive for user takeover
+    if output.status == "confirmed":
+        await client.sessions.stop(session.id)
+
+    # Attach session ID so callers can stop it later
+    output._session_id = str(session.id)
+    output._live_url = session.live_url
+    return output
+
+
+async def stop_booking_session(session_id: str):
+    """Stop a booking browser session (called when user says 'done booking')."""
+    try:
+        client = _client()
+        await client.sessions.stop(session_id)
+        logger.info("Stopped booking session %s", session_id)
+    except Exception as e:
+        logger.warning("Failed to stop booking session %s: %s", session_id, e)

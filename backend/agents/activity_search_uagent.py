@@ -131,8 +131,10 @@ async def _discover_from_json(data: dict) -> dict:
         when=when or None,
         max_steps=int(data.get("max_steps") or 25),
     )
+    live_url = getattr(result, "_live_url", None)
     return {
         "ok": True,
+        "live_url": live_url,
         "result": json.loads(result.model_dump_json()),
     }
 

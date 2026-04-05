@@ -34,6 +34,8 @@ from agents.orchestrator import (  # noqa: E402
     is_group_full,
     _discovery_queue,
     _notification_queue,
+    _booking_queue,
+    _booking_test_queue,
     _remove_member,
     create_bureau,
 )
@@ -57,6 +59,24 @@ try:
     logging.info("Discovery agent loaded — address: %s", discovery_agent.address)
 except ImportError as e:
     logging.warning("Discovery agent not available (missing dependency: %s)", e)
+
+# Try to import the booking agent — requires browser_use
+booking_agent = None
+try:
+    from agents.booking_uagent import protocol as booking_protocol
+    from uagents import Agent as UAgent
+
+    booking_agent = UAgent(
+        name="event_booking",
+        seed=os.environ.get("BOOKING_AGENT_SEED", "booking agent dev seed"),
+        port=None,
+    )
+    booking_agent.include(booking_protocol, publish_manifest=True)
+    import agents.orchestrator as orch
+    orch.BOOKING_AGENT_ADDRESS = booking_agent.address
+    logging.info("Booking agent loaded — address: %s", booking_agent.address)
+except ImportError as e:
+    logging.warning("Booking agent not available (missing dependency: %s)", e)
 
 # ---------------------------------------------------------------------------
 # Form submission model
@@ -99,12 +119,28 @@ async def join_group(group_id: str, form: JoinForm):
 
     profile = form.model_dump()
     count = add_member(group_id, profile)
-    logging.info("Form: %s joined group %s (%d members)", form.name, group_id, count)
+    expected = group_meta.get(group_id, {}).get("expected_members", 0)
+    logging.info("Form: %s joined group %s (%d/%d members)", form.name, group_id, count, expected)
+
+    # Progress notification (include form link so organizer can share again)
+    if expected > 0:
+        bar = "█" * count + "░" * (expected - count)
+        from agents.orchestrator import get_form_link
+        form_link = get_form_link(group_id) if count < expected else ""
+        link_line = f"\n\nForm link: {form_link}" if form_link else ""
+        _notification_queue.append((
+            group_id,
+            f"{form.name} joined the group!\n{bar} {count}/{expected} members{link_line}",
+        ))
 
     full = is_group_full(group_id)
 
     if full:
         logging.info("Group %s is full — queuing discovery", group_id)
+        _notification_queue.append((
+            group_id,
+            f"All {expected} members are in! Searching for events...",
+        ))
         _discovery_queue.append(group_id)
 
     return {
@@ -130,6 +166,13 @@ async def group_status(group_id: str):
         "status": group_meta.get(group_id, {}).get("status", "unknown"),
         "vote_result": group_meta.get(group_id, {}).get("vote_result"),
     }
+
+
+@app.post("/api/test-booking")
+async def test_booking(payload: dict):
+    """Test the booking agent directly with any booking URL."""
+    _booking_test_queue.append(payload)
+    return {"status": "queued", "payload": payload}
 
 
 @app.post("/api/dropout/{group_id}/{user_id}")
@@ -180,17 +223,27 @@ async def confirm_payment(group_id: str, member_name: str):
     if member_name not in paid:
         paid.append(member_name)
 
-    total = len(groups[group_id])
-    logging.info("Payment confirmed: %s in group %s (%d/%d)", member_name, group_id, len(paid), total)
+    needed = meta.get("payments_needed", len(groups[group_id]) - 1)
+    logging.info("Payment confirmed: %s in group %s (%d/%d)", member_name, group_id, len(paid), needed)
 
-    # Check if all members have paid
-    if len(paid) >= total:
+    # Progress notification
+    bar = "█" * len(paid) + "░" * max(0, needed - len(paid))
+    payment_url = meta.get("payment", {}).get("url", "")
+    payment_line = f"\n\nPayment link: {payment_url}" if payment_url and len(paid) < needed else ""
+    _notification_queue.append((
+        group_id,
+        f"Payment received from {member_name}!\n{bar} {len(paid)}/{needed} paid{payment_line}",
+    ))
+
+    # Check if all friends have paid (organizer excluded)
+    if len(paid) >= needed:
         meta["status"] = "booked"
-        logging.info("All payments received for group %s — ready to book", group_id)
+        logging.info("All payments received for group %s — triggering booking", group_id)
         _notification_queue.append((
             group_id,
-            f"All {total} members have paid! Tickets are being booked for {meta.get('chosen_event', {}).get('name', 'the event')}.",
+            f"All {needed} friend{'s have' if needed != 1 else ' has'} paid! Booking tickets now...",
         ))
+        _booking_queue.append(group_id)
 
     return {
         "status": "confirmed",
@@ -228,21 +281,34 @@ async def stripe_webhook(request: Request):
         else:
             customer_email = getattr(getattr(session, "customer_details", None), "email", "unknown")
 
-        logging.info("Stripe payment received: link=%s email=%s", payment_link_id, customer_email)
+        logging.info("Stripe payment received: link=%s email=%s session_type=%s", payment_link_id, customer_email, type(session).__name__)
+        logging.info("  Session keys: %s", list(session.keys()) if isinstance(session, dict) else dir(session))
 
         # Find the group with this payment link
+        logging.info("Looking for payment_link_id=%s in %d groups", payment_link_id, len(group_meta))
         for gid, meta in group_meta.items():
-            if meta.get("payment", {}).get("payment_link_id") == payment_link_id:
+            stored_id = meta.get("payment", {}).get("payment_link_id")
+            logging.info("  Group %s: stored=%s, match=%s", gid, stored_id, stored_id == payment_link_id)
+            if stored_id == payment_link_id:
                 paid = meta.setdefault("payments_received", [])
                 paid.append(customer_email)
-                total = len(groups.get(gid, []))
+                needed = meta.get("payments_needed", len(groups.get(gid, [])) - 1)
 
-                if len(paid) >= total:
+                bar = "█" * len(paid) + "░" * max(0, needed - len(paid))
+                payment_url = meta.get("payment", {}).get("url", "")
+                payment_line = f"\n\nPayment link: {payment_url}" if payment_url and len(paid) < needed else ""
+                _notification_queue.append((
+                    gid,
+                    f"Payment received from {customer_email}!\n{bar} {len(paid)}/{needed} paid{payment_line}",
+                ))
+
+                if len(paid) >= needed:
                     meta["status"] = "booked"
                     _notification_queue.append((
                         gid,
-                        f"All {total} members have paid! Booking tickets now.",
+                        f"All {needed} friend{'s have' if needed != 1 else ' has'} paid! Booking tickets now...",
                     ))
+                    _booking_queue.append(gid)
                 break
 
     return {"received": True}
@@ -265,7 +331,7 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
 
-    bureau = create_bureau(discovery_agent=discovery_agent)
+    bureau = create_bureau(discovery_agent=discovery_agent, booking_agent=booking_agent)
 
     def run_bureau():
         logging.info("Bureau starting:")

@@ -81,7 +81,7 @@ def _env_flag(name: str, default: bool = True) -> bool:
     return v.strip().lower() in ("1", "true", "yes", "on")
 
 
-async def _book_from_json(data: dict) -> dict:
+async def _book_from_json(data: dict, ctx: Context = None, sender: str = None) -> dict:
     """Validate the payload and run the booking browser agent."""
     action = data.get("action")
     if action is not None and action != "book":
@@ -130,6 +130,29 @@ async def _book_from_json(data: dict) -> dict:
     notes: str = str(data.get("notes", ""))
     max_steps: int = int(data.get("max_steps") or 40)
 
+    live_url_holder = {}
+
+    async def capture_live_url_async(url):
+        live_url_holder["url"] = url
+        # Send live URL immediately so the orchestrator can forward it to ASI:One
+        if ctx and sender and url:
+            await ctx.send(
+                sender,
+                ChatMessage(
+                    timestamp=datetime.now(timezone.utc),
+                    msg_id=uuid4(),
+                    content=[TextContent(type="text", text=json.dumps({"live_url": url}))],
+                ),
+            )
+
+    def capture_live_url(url):
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(capture_live_url_async(url))
+        except RuntimeError:
+            live_url_holder["url"] = url
+
     result = await run_event_booking(
         booking_url=booking_url,
         event_title=event_title,
@@ -138,10 +161,13 @@ async def _book_from_json(data: dict) -> dict:
         allow_payment=allow_payment,
         notes=notes,
         max_steps=max_steps,
+        on_live_url=capture_live_url,
     )
-    return {
+    response = {
         "ok": True,
         "result": json.loads(result.model_dump_json()),
+        "live_url": getattr(result, "_live_url", None) or live_url_holder.get("url"),
+        "session_id": getattr(result, "_session_id", None),
     }
 
 
@@ -185,7 +211,7 @@ async def handle_chat_message(ctx: Context, sender: str, msg: ChatMessage) -> No
         return
 
     try:
-        body = await _book_from_json(data if isinstance(data, dict) else {})
+        body = await _book_from_json(data if isinstance(data, dict) else {}, ctx=ctx, sender=sender)
     except Exception as e:
         ctx.logger.exception("event booking failed")
         body = {
