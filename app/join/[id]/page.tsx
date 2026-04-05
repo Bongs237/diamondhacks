@@ -163,7 +163,7 @@ export default function Join() {
     // Do the thing
     console.log(values)
 
-    const response = await fetch(`/api/whatever/${id}`, {
+    const response = await fetch(`/api/submit/${id}`, {
       method: "POST",
       body: JSON.stringify(values),
     });

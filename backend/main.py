@@ -42,6 +42,9 @@ async def health():
     }
     return {"status": "ok", "keys_configured": keys_status}
 
+@app.get("/api/submit/{id}")
+async def submit(id: str):
+    return {"message": "Join request submitted"}
 
 if __name__ == "__main__":
     import uvicorn
