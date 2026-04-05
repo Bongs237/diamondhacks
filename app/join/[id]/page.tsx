@@ -10,12 +10,15 @@ const amatic = Amatic_SC({
   weight: ["400", "700"],
 });
 
+// Data driven type stuff ong fr
+// When form submitted each key is json key, value is what you put in the form
 const FIELDS = [
   {
     key: "name",
     label: "What's your name?",
     placeholder: "Name",
     type: "text" as const,
+    required: true,
     validate: (v: string) => (v.trim().length === 0 ? "Name is required" : ""),
   },
   {
@@ -23,35 +26,40 @@ const FIELDS = [
     label: "What's your budget?",
     placeholder: "$20 - $50, flexible, etc.",
     type: "text" as const,
-    validate: (v: string) => (v.length === 0 ? "Budget is required" : ""),
+    required: false,
+    validate: () => "",
   },
   {
     key: "likes",
     label: "What do you like?",
     placeholder: "Comedy, live music, etc.",
     type: "text" as const,
-    validate: (v: string) => (v.length === 0 ? "Likes are required" : ""),
+    required: false,
+    validate: () => "",
   },
   {
     key: "dislikes",
     label: "What do you dislike?",
     placeholder: "Improv, etc.",
     type: "text" as const,
-    validate: (v: string) => (v.length === 0 ? "Dislikes are required" : ""),
+    required: false,
+    validate: () => "",
   },
   {
     key: "available_times",
     label: "What times are you available?",
     placeholder: "Saturday evening, Friday night, etc.",
     type: "text" as const,
-    validate: (v: string) => (v.length === 0 ? "Available times are required" : ""),
+    required: false,
+    validate: () => "",
   },
   {
-    key: "max_transit_min",
-    label: "What's your max transit time?",
-    placeholder: "30 minutes, 1 hour, etc.",
+    key: "distance",
+    label: "What's your max travel distance?",
+    placeholder: "5-10 miles",
     type: "text" as const,
-    validate: (v: string) => (v.length === 0 ? "Max transit time is required" : ""),
+    required: false,
+    validate: () => "",
   },
 ];
 
@@ -96,6 +104,8 @@ export default function Join() {
     if (hasError) return;
 
     // Do the thing
+    console.log(values)
+
     const response = await fetch(`/api/whatever/${id}`, {
       method: "POST",
       body: JSON.stringify(values),
@@ -123,7 +133,10 @@ export default function Join() {
         <div className="flex flex-col gap-5">
           {FIELDS.map((field) => (
             <div key={field.key} className="flex flex-col gap-1">
-              <label className="text-lg font-bold">{field.label}</label>
+              <label className="text-lg font-bold">
+                {field.label}
+                {field.required && <span className="text-sm font-normal text-red-500 ml-1">*</span>}
+              </label>
               <input
                 type={field.type}
                 placeholder={field.placeholder}
