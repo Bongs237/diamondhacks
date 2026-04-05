@@ -9,7 +9,7 @@ export default function Done() {
   return (
     <div className="flex flex-col flex-1 justify-center items-center font-sans py-10 text-center">
       <h1 className={`${amatic.className} text-7xl font-light pb-7`}>Submitted!</h1>
-      <p className="text-lg">You will be notified when the event is confirmed.</p>
+      <p className="text-lg">The organizer will be notified of the new event.</p>
     </div>
   );
 }
