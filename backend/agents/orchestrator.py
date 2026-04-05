@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 FORM_BASE_URL = os.environ.get("FORM_BASE_URL", "http://localhost:3000")
 DISCOVERY_AGENT_ADDRESS = os.environ.get("DISCOVERY_AGENT_ADDRESS", "")
+BOOKING_AGENT_ADDRESS = os.environ.get("BOOKING_AGENT_ADDRESS", "")
 
 # ---------------------------------------------------------------------------
 # In-memory state
@@ -71,6 +72,15 @@ _asi_sessions: dict[str, dict] = {}
 
 # Queue for async notifications (consumed by agent interval)
 _notification_queue: list[tuple[str, str]] = []  # [(group_id, message), ...]
+
+# Queue for booking requests (consumed by agent interval)
+_booking_queue: list[str] = []  # [group_id, ...]
+
+# Queue for direct booking tests (consumed by agent interval)
+_booking_test_queue: list[dict] = []
+
+# Queue for closing booking sessions
+_close_booking_queue: list[str] = []  # [session_id, ...]
 
 # ---------------------------------------------------------------------------
 # Group + profile logic
@@ -153,20 +163,9 @@ def _build_discovery_payload(group_id: str) -> dict:
     times = [t for t in times if t and "all" not in t.lower()]
     when = times[0] if times else None
 
-    # Build categories from all members' likes
-    categories = set()
-    for m in members:
-        likes = m.get("likes", "")
-        if isinstance(likes, list):
-            categories.update(l.lower().strip() for l in likes)
-        elif likes:
-            for item in likes.split(","):
-                categories.add(item.lower().strip())
-
     return {
         "locations": locations,
         "when": when,
-        "categories": list(categories) if categories else [],
         "max_steps": 25,
     }
 
@@ -200,10 +199,23 @@ _discovery_queue: list[str] = []
 
 @agent.on_interval(period=2.0)
 async def check_queues(ctx: Context):
-    """Poll for pending discovery triggers and notifications."""
+    """Poll for pending discovery triggers, bookings, and notifications."""
     while _discovery_queue:
         group_id = _discovery_queue.pop(0)
         await trigger_discovery(ctx, group_id)
+    while _booking_queue:
+        group_id = _booking_queue.pop(0)
+        await trigger_booking(ctx, group_id)
+    while _booking_test_queue:
+        payload = _booking_test_queue.pop(0)
+        if BOOKING_AGENT_ADDRESS:
+            logger.info("Test booking: %s", json.dumps(payload))
+            await _send_chat(ctx, BOOKING_AGENT_ADDRESS, json.dumps(payload))
+    while _close_booking_queue:
+        session_id = _close_booking_queue.pop(0)
+        from agents.browser_runner import stop_booking_session
+        await stop_booking_session(session_id)
+        logger.info("Closed booking session: %s", session_id)
     while _notification_queue:
         group_id, message = _notification_queue.pop(0)
         await _send_async_update(group_id, message)
@@ -233,7 +245,84 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
 
     # Check if this is a discovery agent response
     if DISCOVERY_AGENT_ADDRESS and sender == DISCOVERY_AGENT_ADDRESS:
+        # Check if it's a live URL notification
+        try:
+            payload = json.loads(user_text)
+            if payload and isinstance(payload, dict) and payload.get("live_url") and not payload.get("result"):
+                for gid, meta in group_meta.items():
+                    if meta.get("status") == "discovering":
+                        await _send_async_update(
+                            gid,
+                            f"Discovery agent is searching! Watch live:\n{payload['live_url']}",
+                        )
+                        break
+                return
+        except (json.JSONDecodeError, ValueError):
+            pass
         await _handle_discovery_response(ctx, user_text)
+        return
+
+    # Check if this is a booking agent response
+    if BOOKING_AGENT_ADDRESS and sender == BOOKING_AGENT_ADDRESS:
+        try:
+            payload = json.loads(user_text)
+        except (json.JSONDecodeError, ValueError):
+            payload = None
+
+        # Null/empty response = agent finished without structured output
+        # Treat as checkout_ready with the original booking URL
+        if not payload or not isinstance(payload, dict):
+            logger.info("Booking agent returned null — creating synthetic checkout_ready")
+            found = False
+            for gid, meta in group_meta.items():
+                if meta.get("status") == "booking":
+                    chosen = meta.get("chosen_event", {})
+                    booking_url = chosen.get("booking_url", "")
+                    live_url = meta.get("_booking_live_url", "")
+                    logger.info("Found booking group %s — booking_url=%s, live_url=%s", gid, booking_url, live_url)
+
+                    msg = (
+                        f"Booking agent finished navigating!\n\n"
+                        f"Complete your booking here: {booking_url}"
+                    )
+                    if live_url:
+                        msg += f"\n\nContinue in the live browser: {live_url}"
+                    msg += "\n\nSay 'done booking' when you're finished to close the browser session."
+                    meta["status"] = "needs_payment"
+                    await _send_async_update(gid, msg)
+                    found = True
+                    break
+            if not found:
+                logger.warning("Booking null response but no group in booking state")
+            return
+
+        # Live URL notification — store live_url and session_id
+        if payload.get("live_url") and not payload.get("result"):
+            for gid, meta in group_meta.items():
+                if meta.get("status") == "booking":
+                    meta["_booking_live_url"] = payload["live_url"]
+                    if payload.get("session_id"):
+                        meta["_booking_session_id"] = payload["session_id"]
+                    await _send_async_update(
+                        gid,
+                        f"Booking agent is navigating the ticketing site!\n\n"
+                        f"Watch live: {payload['live_url']}\n\n"
+                        f"If the agent gets stuck at login or payment, you can take over from this link.",
+                    )
+                    break
+            return
+
+        # Booking result — route to booking handler
+        for gid, meta in group_meta.items():
+            if meta.get("status") == "booking":
+                if payload.get("session_id"):
+                    meta["_booking_session_id"] = payload["session_id"]
+                if payload.get("live_url"):
+                    meta["_booking_live_url"] = payload["live_url"]
+                await _handle_booking_response(gid, payload)
+                return
+
+        logger.warning("Got booking response but no group is in booking state")
         return
 
     # Save session info for async updates
@@ -302,6 +391,56 @@ async def _send_async_update(group_id: str, text: str):
 
 
 # ---------------------------------------------------------------------------
+# Booking trigger — called when all payments are confirmed
+# ---------------------------------------------------------------------------
+
+async def trigger_booking(ctx: Context, group_id: str):
+    """Send reservation request to the discovery agent after all payments."""
+    meta = group_meta.get(group_id, {})
+    chosen = meta.get("chosen_event")
+    if not chosen:
+        logger.warning("No chosen event for group %s — can't book", group_id)
+        return
+
+    members = groups.get(group_id, [])
+    booking_url = chosen.get("booking_url", "")
+
+    if not booking_url:
+        await _send_async_update(
+            group_id,
+            f"No booking URL for {chosen['name']} — this is a walk-in event, no reservation needed!",
+        )
+        return
+
+    meta["status"] = "booking"
+
+    payload = {
+        "booking_url": booking_url,
+        "event_title": chosen.get("name", ""),
+        "when": chosen.get("time", ""),
+        "party_size": len(members),
+        "allow_payment": False,
+        "notes": f"Group of {len(members)} people. Stop before payment.",
+        "max_steps": 20,
+    }
+
+    logger.info("Booking triggered for group %s — %s (%d people)", group_id, chosen["name"], len(members))
+    logger.info("Booking payload: %s", json.dumps(payload))
+
+    await _send_async_update(group_id, f"All paid! Booking {chosen['name']} for {len(members)} people...")
+
+    if BOOKING_AGENT_ADDRESS:
+        await _send_chat(ctx, BOOKING_AGENT_ADDRESS, json.dumps(payload))
+        logger.info("Sent booking request to booking agent")
+    else:
+        logger.warning("No booking agent — can't automate booking")
+        await _send_async_update(
+            group_id,
+            f"Book manually here: {booking_url}\nParty size: {len(members)}",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Discovery trigger — called when group is full
 # ---------------------------------------------------------------------------
 
@@ -333,12 +472,18 @@ async def trigger_discovery(ctx: Context, group_id: str):
 
 
 async def _handle_discovery_response(ctx: Context, text: str):
-    """Handle a ChatMessage from the discovery agent."""
+    """Handle a ChatMessage from the discovery agent (discovery or booking response)."""
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
         logger.warning("Discovery agent sent non-JSON: %s", text[:200])
         return
+
+    # Check if this is a booking response
+    for gid, meta in group_meta.items():
+        if meta.get("status") == "booking":
+            await _handle_booking_response(gid, payload)
+            return
 
     # Find which group this discovery is for (most recent discovering group)
     group_id = None
@@ -352,6 +497,75 @@ async def _handle_discovery_response(ctx: Context, text: str):
         return
 
     await _handle_discovery_result(ctx, group_id, payload)
+
+
+async def _handle_booking_response(group_id: str, payload: dict):
+    """Process the reservation agent's response."""
+    meta = group_meta.get(group_id, {})
+    chosen = meta.get("chosen_event", {})
+    ok = payload.get("ok", False)
+    result = payload.get("result", {})
+
+    live_url = meta.get("_booking_live_url", "")
+
+    if ok:
+        status = result.get("status", "unknown")
+        detail = result.get("detail", "")
+        cart_url = result.get("deep_link_or_cart_url", "")
+
+        if status == "completed":
+            meta["status"] = "tickets_ready"
+            msg = f"Tickets booked for {chosen.get('name', 'the event')}!\n\n{detail}"
+            if result.get("confirmation_number"):
+                msg += f"\nConfirmation: {result['confirmation_number']}"
+            await _send_async_update(group_id, msg)
+
+        elif status == "checkout_ready":
+            if live_url:
+                meta["status"] = "needs_payment"
+                msg = f"Booking for {chosen.get('name', 'the event')} is at checkout!\n\n{detail}"
+                msg += f"\n\nComplete checkout here: {live_url}"
+                msg += "\n\nSay 'done booking' when you're finished."
+                await _send_async_update(group_id, msg)
+            else:
+                meta["status"] = "booking_failed"
+                msg = f"Booking failed — could not get a live browser session for {chosen.get('name', 'the event')}."
+                await _send_async_update(group_id, msg)
+
+        elif status == "blocked":
+            reason = result.get("human_required_reason", "unknown")
+            meta["status"] = "booking_blocked"
+            msg = f"Booking agent needs help: {reason}"
+            if live_url:
+                msg += f"\n\nContinue in browser: {live_url}"
+            else:
+                msg += f"\n\nBook manually: {chosen.get('booking_url', 'N/A')}"
+            msg += "\n\nSay 'done booking' when you're finished."
+            msg += f"\nParty size: {len(groups.get(group_id, []))}"
+            await _send_async_update(group_id, msg)
+
+        elif status == "failed":
+            meta["status"] = "booking_failed"
+            msg = f"Booking failed: {detail}"
+            if live_url:
+                msg += f"\n\nTry continuing in browser: {live_url}"
+            else:
+                msg += f"\n\nBook manually: {chosen.get('booking_url', 'N/A')}"
+            await _send_async_update(group_id, msg)
+
+        else:
+            meta["status"] = "booking_in_progress"
+            await _send_async_update(group_id, f"Booking update: {detail}")
+    else:
+        error = payload.get("error", "Unknown error")
+        meta["status"] = "booking_failed"
+        logger.error("Booking failed for group %s: %s", group_id, error)
+        msg = f"Booking failed: {error}"
+        if live_url:
+            msg += f"\n\nTry continuing in browser: {live_url}"
+        else:
+            msg += f"\n\nBook manually: {chosen.get('booking_url', 'N/A')}"
+        await _send_async_update(group_id, msg)
 
 
 async def _handle_discovery_result(ctx: Context, group_id: str, payload: dict):
@@ -556,7 +770,7 @@ async def _start_voting(ctx: Context, sender: str, group_id: str, events: list[d
 
 INTENT_SYSTEM_PROMPT = """You are an intent parser for EventPulse, a group event planning app.
 Given a user message and context about the current group state, return ONLY a JSON object with:
-- "intent": one of: "status", "new_group", "remove_member", "cancel_group", "get_link", "payment_status", "view_results", "event_info", "pick_event", "unknown"
+- "intent": one of: "status", "new_group", "remove_member", "cancel_group", "get_link", "payment_status", "view_results", "event_info", "pick_event", "close_booking", "unknown"
 - "number": integer if the user references an event number or group size. "the winner" or "first one" = 1. Otherwise null.
 - "name": string if the user mentions a person's name, otherwise null
 
@@ -568,6 +782,7 @@ Key rules:
 - "what about 3" or "more on 3" = event_info (they want details)
 - Any mention of "paid", "pay", "payment", "who paid", "how many paid", "did everyone pay" = payment_status
 - "status" without payment context = status (group member info)
+- "done booking", "close browser", "finished booking", "done", "close session" = close_booking
 
 Return ONLY the JSON object, no explanation."""
 
@@ -599,6 +814,8 @@ def _parse_intent(text: str, group_id: str | None = None) -> dict:
     lower = text.lower().strip()
     if any(w in lower for w in ("paid", "pay", "payment")):
         return {"intent": "payment_status", "number": None, "name": None}
+    if any(phrase in lower for phrase in ("done booking", "close browser", "finished booking", "close session", "done with booking")):
+        return {"intent": "close_booking", "number": None, "name": None}
 
     import requests as http_requests
 
@@ -640,6 +857,9 @@ def _parse_intent_fallback(text: str) -> dict:
     lower = text.lower().strip()
     number = _extract_number(text)
 
+    # Close booking check
+    if any(phrase in lower for phrase in ("done booking", "close browser", "finished booking", "close session")):
+        return {"intent": "close_booking", "number": None, "name": None}
     # Payment check BEFORE status (since "how many paid" contains "how many")
     if any(w in lower for w in ("paid", "pay", "payment")):
         return {"intent": "payment_status", "number": None, "name": None}
@@ -787,10 +1007,13 @@ def _route_message(sender: str, text: str) -> str:
                 group_meta[group_id]["payment"] = payment
                 group_meta[group_id]["payments_received"] = []
                 group_meta[group_id]["status"] = "awaiting_payment"
+                friends_to_pay = member_count - 1  # organizer doesn't pay
+                group_meta[group_id]["payments_needed"] = friends_to_pay
                 confirmation += (
-                    f"\n\nPayment link for all {member_count} members:\n"
+                    f"\n\nPayment link (share with your {friends_to_pay} friend{'s' if friends_to_pay != 1 else ''}):\n"
                     f"{payment['url']}\n\n"
-                    f"Once everyone has paid, I'll book the tickets."
+                    f"Once everyone has paid, I'll book the tickets.\n"
+                    f"(You don't need to pay — you're the organizer!)"
                 )
             else:
                 group_meta[group_id]["status"] = "booked"
@@ -804,6 +1027,16 @@ def _route_message(sender: str, text: str) -> str:
             return "No events to pick from yet."
         return f"Invalid number. Pick between 1 and {len(ranked_events)}."
 
+    if action == "close_booking":
+        meta = group_meta.get(group_id, {})
+        session_id = meta.get("_booking_session_id")
+        if session_id:
+            _close_booking_queue.append(session_id)
+            meta.pop("_booking_session_id", None)
+            meta.pop("_booking_live_url", None)
+            return "Browser session closed. Booking is done!"
+        return "No active booking session to close."
+
     # Unknown intent — show status
     summary = _group_status_with_readiness(group_id)
     if not is_group_full(group_id):
@@ -816,7 +1049,7 @@ def _start_setup(sender: str, text: str) -> str:
     if group_size and group_size > 0:
         return _finalize_setup(sender, int(group_size))
     _pending_setup[sender] = {"stage": "need_group_size"}
-    return "I'd love to help plan your event! How many friends are joining?"
+    return "I'd love to help plan your event! How many people total (including you)?"
 
 
 def _handle_setup(sender: str, text: str) -> str:
@@ -836,9 +1069,9 @@ def _finalize_setup(sender: str, group_size: int) -> str:
     link = get_form_link(group_id)
     return (
         f"I've created your event group for {group_size} people!\n\n"
-        f"Share this link with your friends so they can fill out their preferences:\n"
+        f"Share this link with your friends (and fill it out yourself too!):\n"
         f"{link}\n\n"
-        f"I'll let you know once everyone has submitted. "
+        f"I'll let you know once all {group_size} people have submitted. "
         f"Ask me for a 'status' update anytime."
     )
 
@@ -963,7 +1196,7 @@ def _extract_number(text: str) -> int | None:
 # Bureau setup + standalone runner
 # ---------------------------------------------------------------------------
 
-def create_bureau(discovery_agent=None) -> Bureau:
+def create_bureau(discovery_agent=None, booking_agent=None) -> Bureau:
     global bureau
     bureau = Bureau(port=AGENT_PORT, endpoint=[AGENT_ENDPOINT])
     bureau.add(agent)
@@ -971,6 +1204,9 @@ def create_bureau(discovery_agent=None) -> Bureau:
     if discovery_agent:
         bureau.add(discovery_agent)
         logger.info("Discovery agent added to bureau: %s", discovery_agent.address)
+    if booking_agent:
+        bureau.add(booking_agent)
+        logger.info("Booking agent added to bureau: %s", booking_agent.address)
     return bureau
 
 

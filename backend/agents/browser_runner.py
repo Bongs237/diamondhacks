@@ -127,21 +127,34 @@ For **every** activity you include:
 - Compute `distances_to_members`: the straight-line distance in miles from each member's coordinates
   to the venue coordinates, using the Haversine formula. Include one entry per member (member_index
   is 1-based).
-- Fill `estimated_cost_per_person_usd` with a realistic **total spend** per person — this means
-  tickets or entry fees PLUS typical consumption at the venue (drinks, food, games, etc.). A bar
-  with no cover still costs ~$25–40 per person in drinks; a restaurant costs a typical meal; a
-  free public park where people spend nothing is 0.0. 0.0 is ONLY for activities where a person
-  would genuinely spend nothing. For walk-in venues, check the venue's menu, Yelp, Google, or
-  similar to estimate a realistic per-person total. Only leave null if an estimate is genuinely
-  impossible after actively searching.
+- Fill `estimated_cost_per_person_usd` with ONLY the ticket price, entry fee, or cover charge per
+  person. Do NOT add estimated food, drinks, or other consumption costs. A movie ticket is ~$15,
+  not $30. A free park is 0.0. A restaurant entry is 0.0 (food cost is the person's choice).
+  Only include what someone MUST pay to attend. Leave null if unknown.
 - Fill `booking_url` with the direct ticket-purchase or reservation link for **any** activity that
   involves tickets, cover charges, reservations, or entry fees. Check the venue's official site and
   major platforms (Ticketmaster, Eventbrite, OpenTable, etc.). Only omit if the activity is
   walk-in and completely free with no booking needed.
 
+**Verification — CRITICAL**:
+- ONLY include events/activities you have CONFIRMED exist by visiting an official source (venue
+  website, ticketing platform, or verified event listing). Do NOT guess or assume an event exists.
+- For movies: you MUST verify the specific film is actually showing at that theater on that date
+  by checking the theater's showtimes page (AMC, Fandango, etc.). Do NOT list a movie unless you
+  see it in the actual showtimes for that date.
+- For concerts/shows: verify the performer is listed on the venue's calendar for that specific date.
+- For restaurants/bars: verify they are open on the requested day by checking their hours page.
+- If you cannot confirm an event is real, DO NOT include it. Fewer verified results are better
+  than many unverified ones.
+
+**Specificity**: every title must be specific enough to book. Do NOT return generic titles like
+"Movie at AMC" or "Concert at Venue". Instead use the actual event name, e.g. "Project Hail Mary
+at AMC La Jolla 12 (4:00 PM)" or "Hot 8 Brass Band at Belly Up Tavern". For movies, include the
+film title and showtime. For restaurants, include the cuisine type.
+
 Return JSON matching the ActivityDiscoveryResult schema:
 include search_notes and a list of activities with accurate booking_url when available.
-Do not invent events; if uncertain, say so in the description and omit booking_url.
+Do not invent events. If you are unsure whether something is real, leave it out.
 """.strip()
 
 
@@ -161,6 +174,7 @@ async def run_activity_discovery(
     result = await client.run(
         _discovery_task(members=members, when=when),
         output_schema=ActivityDiscoveryResult,
+        model="gemini-3-flash",
     )
     if result.output is not None:
         if isinstance(result.output, ActivityDiscoveryResult):
@@ -341,28 +355,44 @@ async def run_event_booking(
     if on_live_url:
         on_live_url(session.live_url)
 
-    try:
-        result = await client.run(
-            _booking_task(
-                booking_url=booking_url,
-                event_title=event_title,
-                when=when,
-                party_size=party_size,
-                allow_payment=allow_payment,
-                notes=notes,
-            ),
-            output_schema=BookingResult,
-            session_id=session.id,
-        )
-    finally:
-        await client.sessions.stop(session.id)
+    result = await client.run(
+        _booking_task(
+            booking_url=booking_url,
+            event_title=event_title,
+            when=when,
+            party_size=party_size,
+            allow_payment=allow_payment,
+            notes=notes,
+        ),
+        output_schema=BookingResult,
+        session_id=session.id,
+    )
 
     if result.output is not None:
-        if isinstance(result.output, BookingResult):
-            return result.output
-        return BookingResult.model_validate(result.output)
-    return BookingResult(
-        status="blocked",
-        detail="Agent finished without structured output; check logs.",
-        human_required_reason="retry_or_inspect_browser_session",
-    )
+        output = result.output if isinstance(result.output, BookingResult) else BookingResult.model_validate(result.output)
+    else:
+        output = BookingResult(
+            status="checkout_ready",
+            detail="Agent finished navigating. Browser session is still open for you to complete checkout.",
+            human_required_reason="payment",
+        )
+
+    # Keep session alive if user needs to take over (checkout/blocked)
+    # Stop it for confirmed/failed since no user action needed
+    if output.status in ("confirmed", "failed"):
+        await client.sessions.stop(session.id)
+
+    # Attach session ID so callers can stop it later
+    output._session_id = str(session.id)
+    output._live_url = session.live_url
+    return output
+
+
+async def stop_booking_session(session_id: str):
+    """Stop a booking browser session (called when user says 'done booking')."""
+    try:
+        client = _client()
+        await client.sessions.stop(session_id)
+        logger.info("Stopped booking session %s", session_id)
+    except Exception as e:
+        logger.warning("Failed to stop booking session %s: %s", session_id, e)

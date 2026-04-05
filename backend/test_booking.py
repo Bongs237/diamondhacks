@@ -13,6 +13,7 @@ async def main():
     result = await run_event_booking(
         booking_url="https://www.amctheatres.com/movie-theatres/san-diego/amc-la-jolla-12",
         event_title="Movie Night at AMC La Jolla 12",
+        
         when="Wed. Apr 08, 2026",
         party_size=2,
         allow_payment=False,
