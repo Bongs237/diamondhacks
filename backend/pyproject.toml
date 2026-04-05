@@ -15,5 +15,6 @@ dependencies = [
     "langchain-anthropic>=1.4.0",
     "stripe>=15.0.1",
     "cosmpy>=0.11.2",
+    "httpx>=0.27.0",
     "requests>=2.33.1",
 ]
