@@ -1,21 +1,36 @@
 """
-Browser-use runners: activity discovery (broad web search) and reservation assistance.
+Browser-use runners: activity discovery, reservation assistance, and event booking.
 
-LLM: **Browser Use Cloud** via ``ChatBrowserUse``. Requires ``BROWSER_USE_API_KEY``.
+Uses the **Browser Use Cloud SDK** (``browser-use-sdk``) which runs tasks on a
+managed hardened Chromium fork with stealth anti-fingerprinting, automatic CAPTCHA
+solving, and residential proxies — all enabled by default.
 
-Browser: **Browser Use Cloud** by default (``BrowserSession(use_cloud=True)``).
-Set ``BROWSER_USE_CLOUD=0`` for a local browser; LLM still uses Browser Use Cloud.
+Requires ``BROWSER_USE_API_KEY`` (starts with ``bu_``).
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 
-from browser_use import Agent, BrowserSession, ChatBrowserUse
+from browser_use_sdk.v3 import AsyncBrowserUse
 
-from .browser_schemas import ActivityDiscoveryResult, ReservationAttemptResult
+from .browser_schemas import ActivityDiscoveryResult, BookingResult, ReservationAttemptResult
+
+logger = logging.getLogger(__name__)
+
+
+def _client() -> AsyncBrowserUse:
+    if not os.environ.get("BROWSER_USE_API_KEY"):
+        raise RuntimeError(
+            "BROWSER_USE_API_KEY is not set. "
+            "Get a key at https://cloud.browser-use.com"
+        )
+    return AsyncBrowserUse()
 
 
 @dataclass(frozen=True)
@@ -25,31 +40,6 @@ class MemberLocation:
     lat: float
     lon: float
     radius_miles: float
-
-
-def _llm() -> ChatBrowserUse:
-    if not os.environ.get("BROWSER_USE_API_KEY"):
-        raise RuntimeError(
-            "BROWSER_USE_API_KEY is required for the Browser Use Cloud LLM. "
-            "Get a key at https://cloud.browser-use.com"
-        )
-    model = os.environ.get("BROWSER_USE_LLM_MODEL", "bu-latest")
-    return ChatBrowserUse(model=model)
-
-
-def _browser_agent_kwargs() -> dict:
-    """Return kwargs for Agent() controlling local vs Browser Use Cloud."""
-    raw = os.environ.get("BROWSER_USE_CLOUD", "1").strip().lower()
-    use_local = raw in ("0", "false", "no", "off", "local")
-    if use_local:
-        return {}
-    if not os.environ.get("BROWSER_USE_API_KEY"):
-        raise RuntimeError(
-            "Browser Use Cloud is enabled (BROWSER_USE_CLOUD defaults to 1) but BROWSER_USE_API_KEY "
-            "is not set. Add an API key from https://cloud.browser-use.com or set BROWSER_USE_CLOUD=0 "
-            "to use a local browser."
-        )
-    return {"browser": BrowserSession(use_cloud=True)}
 
 
 def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -70,8 +60,12 @@ def _search_center(members: list[MemberLocation]) -> tuple[float, float]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Activity Discovery
+# ---------------------------------------------------------------------------
+
 def _discovery_task(*, members: list[MemberLocation], when: str | None = None) -> str:
-    from datetime import datetime, timezone  # local import to keep module-level imports clean
+    from datetime import datetime, timezone
 
     lines = "\n".join(
         f"  - User {i + 1}: latitude {m.lat:.6f}, longitude {m.lon:.6f}, radius {m.radius_miles:.1f} miles"
@@ -117,18 +111,17 @@ individual radius before including it.
 
 {time_section}
 
-Search the open web (search engines, maps, local listings, ticketing sites) for **many** varied
-options in the region that satisfy the constraints. Prefer primary sources (official venue or ticket
-pages) over scraper blogs.
+Search the open web (search engines, maps, local listings, ticketing sites) for **at least 20**
+varied options in the region that satisfy the constraints. Use multiple sources and search queries
+to reach 20 results — try different categories (events, venues, dining, outdoors, arts, sports,
+nightlife) and different listing sites to maximise variety. Prefer primary sources (official venue
+or ticket pages) over scraper blogs.
 
-**Blocked pages / CAPTCHAs**: if any page presents a CAPTCHA, robot check, login wall, or any
-challenge that requires human interaction, **immediately navigate away** — do not attempt to solve
-it. Note the blocked URL in search_notes and move on to the next source. There are always
-alternative listing sites and search results to try.
+If a page is blocked (CAPTCHA, login wall), skip it and try a different source — there are always
+alternative listing sites.
 
-**Partial results are fine**: if you exhaust `max_steps` or run into repeated blocks before
-finding a full list, output whatever activities you have gathered so far rather than stopping
-with an empty result.
+**Partial results are fine**: if you run into repeated blocks before finding a full list, output
+whatever activities you have gathered so far rather than stopping with an empty result.
 
 For **every** activity you include:
 - Compute `distances_to_members`: the straight-line distance in miles from each member's coordinates
@@ -146,11 +139,42 @@ For **every** activity you include:
   major platforms (Ticketmaster, Eventbrite, OpenTable, etc.). Only omit if the activity is
   walk-in and completely free with no booking needed.
 
-When finished, use the structured output action with JSON matching ActivityDiscoveryResult:
+Return JSON matching the ActivityDiscoveryResult schema:
 include search_notes and a list of activities with accurate booking_url when available.
 Do not invent events; if uncertain, say so in the description and omit booking_url.
 """.strip()
 
+
+async def run_activity_discovery(
+    *,
+    members: list[MemberLocation],
+    when: str | None = None,
+    max_steps: int = 30,
+    sensitive_data: dict[str, str | dict[str, str]] | None = None,
+) -> ActivityDiscoveryResult:
+    if not members:
+        raise ValueError("members must contain at least one MemberLocation")
+    if any(m.radius_miles <= 0 for m in members):
+        raise ValueError("every MemberLocation.radius_miles must be > 0")
+
+    client = _client()
+    result = await client.run(
+        _discovery_task(members=members, when=when),
+        output_schema=ActivityDiscoveryResult,
+    )
+    if result.output is not None:
+        if isinstance(result.output, ActivityDiscoveryResult):
+            return result.output
+        return ActivityDiscoveryResult.model_validate(result.output)
+    return ActivityDiscoveryResult(
+        search_notes="Agent finished without structured output; check logs.",
+        activities=[],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reservation Assist
+# ---------------------------------------------------------------------------
 
 def _reservation_task(
     *,
@@ -182,48 +206,9 @@ Extra notes: {notes or "none"}
 Open relevant official ticketing or booking sites, find matching showtimes or slots, and advance as far
 as is safe. {pay}
 
-If login, CAPTCHA, or SMS verification blocks automation, set status to blocked and explain.
-When finished, use the structured output action with JSON matching ReservationAttemptResult.
+If a hard login wall or SMS verification blocks automation, set status to blocked and explain.
+Return JSON matching the ReservationAttemptResult schema.
 """.strip()
-
-
-async def run_activity_discovery(
-    *,
-    members: list[MemberLocation],
-    when: str | None = None,
-    max_steps: int = 30,
-    sensitive_data: dict[str, str | dict[str, str]] | None = None,
-) -> ActivityDiscoveryResult:
-    if not members:
-        raise ValueError("members must contain at least one MemberLocation")
-    if any(m.radius_miles <= 0 for m in members):
-        raise ValueError("every MemberLocation.radius_miles must be > 0")
-
-    agent = Agent(
-        task=_discovery_task(members=members, when=when),
-        llm=_llm(),
-        output_model_schema=ActivityDiscoveryResult,
-        sensitive_data=sensitive_data,
-        extend_system_message=(
-            "If you encounter a CAPTCHA, robot/bot check, login wall, or any page challenge that "
-            "requires human input, navigate away immediately — never attempt to solve or wait on it. "
-            "Note the blocked URL in search_notes and continue with a different source. "
-            "If you are running low on steps, stop searching and output the activities you have "
-            "already found rather than returning an empty result."
-        ),
-        **_browser_agent_kwargs(),
-    )
-    history = await agent.run(max_steps=max_steps)
-    parsed = history.structured_output
-    if parsed is not None:
-        return parsed
-    raw = history.final_result()
-    if raw:
-        return ActivityDiscoveryResult.model_validate_json(raw)
-    return ActivityDiscoveryResult(
-        search_notes="Agent finished without structured output; check logs.",
-        activities=[],
-    )
 
 
 async def run_reservation_assist(
@@ -238,8 +223,9 @@ async def run_reservation_assist(
     max_steps: int = 35,
     sensitive_data: dict[str, str | dict[str, str]] | None = None,
 ) -> ReservationAttemptResult:
-    agent = Agent(
-        task=_reservation_task(
+    client = _client()
+    result = await client.run(
+        _reservation_task(
             area=area,
             activity_type=activity_type,
             title_hint=title_hint,
@@ -248,23 +234,134 @@ async def run_reservation_assist(
             allow_payment=allow_payment,
             notes=notes,
         ),
-        llm=_llm(),
-        output_model_schema=ReservationAttemptResult,
-        sensitive_data=sensitive_data,
-        extend_system_message=(
-            "Never expose secrets in extracted content. Use sensitive_data placeholders for logins when configured. "
-            "Prefer completing seat selection and stopping at payment unless allow_payment is true."
-        ),
-        **_browser_agent_kwargs(),
+        output_schema=ReservationAttemptResult,
     )
-    history = await agent.run(max_steps=max_steps)
-    parsed = history.structured_output
-    if parsed is not None:
-        return parsed
-    raw = history.final_result()
-    if raw:
-        return ReservationAttemptResult.model_validate_json(raw)
+    if result.output is not None:
+        if isinstance(result.output, ReservationAttemptResult):
+            return result.output
+        return ReservationAttemptResult.model_validate(result.output)
     return ReservationAttemptResult(
+        status="blocked",
+        detail="Agent finished without structured output; check logs.",
+        human_required_reason="retry_or_inspect_browser_session",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Event Booking
+# ---------------------------------------------------------------------------
+
+def _booking_task(
+    *,
+    booking_url: str,
+    event_title: str,
+    when: str,
+    party_size: int,
+    allow_payment: bool,
+    notes: str,
+) -> str:
+    pay_instruction = (
+        "You MAY complete payment if the user explicitly allowed it and the flow is secure. "
+        "Never type raw card numbers into a chat input. After payment succeeds, record the "
+        "confirmation number from the confirmation page."
+        if allow_payment
+        else "Do NOT submit payment. Stop at the checkout/cart page and record the total cost "
+        "shown there. Return the checkout URL so a human can complete payment."
+    )
+    return f"""
+You are completing a ticket or reservation booking for a group.
+
+Event: {event_title}
+Starting URL: {booking_url}
+When: {when}
+Party size (number of tickets): {party_size}
+Extra notes: {notes or "none"}
+
+Steps:
+1. Navigate to the starting URL.
+2. Select the date/time that matches "{when}". If multiple slots are available, pick the closest match.
+3. Choose {party_size} ticket(s) / seat(s).
+4. Proceed through the booking flow as far as is safe.
+5. Before or at the checkout page, extract the **total cost** shown (all tickets + fees + taxes combined).
+   Also compute cost_per_person_usd = total / {party_size}.
+6. {pay_instruction}
+
+**CAPTCHAs and bot challenges**: the browser has built-in stealth and CAPTCHA-solving capabilities.
+If you land on a Cloudflare, hCaptcha, reCAPTCHA, or similar challenge page, wait a few seconds
+and retry — the browser will handle it automatically. Only set status to "blocked" if a hard
+login/SMS wall requires human credentials.
+
+**Alternative routes**: if the main URL is consistently blocked, try navigating to the event via a
+search engine result or an alternative ticketing platform (e.g. StubHub, SeatGeek, Vivid Seats).
+
+**Partial progress is fine**: if you cannot complete the booking, return whatever you reached
+(checkout URL, total cost if visible, reason for stopping).
+
+Return JSON matching the BookingResult schema.
+Populate total_cost_usd and cost_per_person_usd whenever those numbers are visible on screen.
+""".strip()
+
+
+async def run_event_booking(
+    *,
+    booking_url: str,
+    event_title: str,
+    when: str,
+    party_size: int = 2,
+    allow_payment: bool = False,
+    notes: str = "",
+    max_steps: int = 40,
+    sensitive_data: dict[str, str | dict[str, str]] | None = None,
+    on_live_url: Callable[[str], None] | None = None,
+) -> BookingResult:
+    """Navigate to *booking_url*, select *party_size* tickets for *when*, and return cost + status.
+
+    Uses Browser Use Cloud SDK — runs on a hardened Chromium fork with stealth
+    anti-fingerprinting, CAPTCHA solving, and residential proxies.
+
+    Args:
+        booking_url:   Direct ticket/reservation URL for the event.
+        event_title:   Human-readable event name (used only for the task prompt).
+        when:          Date/time expression, e.g. "Saturday April 5 at 8pm".
+        party_size:    Number of tickets to select.
+        allow_payment: If True the agent may submit payment; otherwise stops at checkout.
+        notes:         Any extra instructions forwarded to the browser agent.
+        max_steps:     Unused (Cloud SDK manages step budget internally). Kept for API compat.
+        sensitive_data: Unused (Cloud SDK handles secrets via profiles). Kept for API compat.
+        on_live_url:   Optional callback called with the live browser preview URL immediately
+                       after the session is created. Use this to watch the agent in real time.
+
+    Returns:
+        BookingResult with status, total_cost_usd, cost_per_person_usd, and optional
+        confirmation_number / deep_link_or_cart_url.
+    """
+    client = _client()
+
+    session = await client.sessions.create()
+    if on_live_url:
+        on_live_url(session.live_url)
+
+    try:
+        result = await client.run(
+            _booking_task(
+                booking_url=booking_url,
+                event_title=event_title,
+                when=when,
+                party_size=party_size,
+                allow_payment=allow_payment,
+                notes=notes,
+            ),
+            output_schema=BookingResult,
+            session_id=session.id,
+        )
+    finally:
+        await client.sessions.stop(session.id)
+
+    if result.output is not None:
+        if isinstance(result.output, BookingResult):
+            return result.output
+        return BookingResult.model_validate(result.output)
+    return BookingResult(
         status="blocked",
         detail="Agent finished without structured output; check logs.",
         human_required_reason="retry_or_inspect_browser_session",

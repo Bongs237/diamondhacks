@@ -56,8 +56,8 @@ class ActivityDiscoveryResult(BaseModel):
     )
     activities: list[ActivityIdea] = Field(
         default_factory=list,
-        max_length=15,
-        description="Ranked suggestions that fit the group's constraints",
+        max_length=20,
+        description="Up to 20 ranked suggestions that fit the group's constraints",
     )
 
 
@@ -72,4 +72,43 @@ class ReservationAttemptResult(BaseModel):
     human_required_reason: str | None = Field(
         default=None,
         description="If blocked or checkout_ready, why a human must continue (login, CAPTCHA, payment, etc.)",
+    )
+
+
+class BookingResult(BaseModel):
+    status: str = Field(
+        description=(
+            "One of: confirmed, checkout_ready, blocked, failed. "
+            "'confirmed' means booking succeeded and a confirmation number exists. "
+            "'checkout_ready' means the cart/checkout page was reached but payment was not submitted. "
+            "'blocked' means a CAPTCHA, login wall, or SMS verification prevented progress. "
+            "'failed' means the event could not be found or selected."
+        )
+    )
+    detail: str = Field(
+        description="Human-readable summary of what was accomplished and what remains"
+    )
+    total_cost_usd: float | None = Field(
+        default=None,
+        description=(
+            "Total USD charged or to-be-charged for all tickets combined "
+            "(including fees, taxes, and any add-ons). Extract from the order summary, "
+            "cart total, or confirmation page. Required whenever the value is visible."
+        ),
+    )
+    cost_per_person_usd: float | None = Field(
+        default=None,
+        description="Per-ticket or per-person USD cost (total_cost_usd / party_size). Compute if possible.",
+    )
+    confirmation_number: str | None = Field(
+        default=None,
+        description="Booking or order confirmation number/code shown after purchase, if available",
+    )
+    deep_link_or_cart_url: str | None = Field(
+        default=None,
+        description="Checkout, cart, or confirmation URL reached during the booking flow",
+    )
+    human_required_reason: str | None = Field(
+        default=None,
+        description="If blocked or checkout_ready, explain why a human must continue (login, CAPTCHA, payment, etc.)",
     )
