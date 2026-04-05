@@ -1,15 +1,15 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { Amatic_SC } from "next/font/google";
+import { DM_Sans } from "next/font/google";
 import { useParams, useRouter } from "next/navigation";
 import { SpinnerIcon } from "@/components/SpinnerIcon";
 import { Field } from "@/utils/types";
 import { MapPin } from "lucide-react";
 
-const amatic = Amatic_SC({
+const dmSansDisplay = DM_Sans({
   subsets: ["latin"],
-  weight: ["400", "700"],
+  weight: ["400", "600", "700"],
 });
 
 // Data driven type stuff ong fr
@@ -49,8 +49,9 @@ const FIELDS: Field[] = [
   },
   {
     key: "available_times",
-    label: "What times are you available?",
-    placeholder: "Saturday evening, Friday night, etc.",
+    label:
+      "When are you free? List each day and the time windows that work.",
+    placeholder: "e.g. Sat 5–7pm & 8–9pm; Fri 10–11am",
     type: "text",
     required: false,
     validate: () => "",
@@ -96,7 +97,7 @@ function LocationField({
         type="button"
         onClick={onGetLocation}
         disabled={locationLoading}
-        className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-300 rounded-md p-3 text-gray-600 hover:border-blue-400 hover:text-blue-600 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        className="flex items-center justify-center gap-2 border-2 border-dashed border-neutral-600 rounded-md p-3 text-zinc-300 bg-neutral-900 hover:border-zinc-400 hover:text-zinc-100 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {locationLoading ? (
           <>
@@ -111,15 +112,15 @@ function LocationField({
         )}
       </button>
       {locationCity && (
-        <p className="text-sm text-green-700 font-medium text-center">
+        <p className="text-sm text-emerald-400 font-medium text-center">
           {locationCity}
         </p>
       )}
       {locationError && (
-        <p className="text-red-500 text-sm">{locationError}</p>
+        <p className="text-red-400 text-sm">{locationError}</p>
       )}
       {touched[field.key] && errors[field.key] && !locationError && (
-        <p className="text-red-500 text-sm">{errors[field.key]}</p>
+        <p className="text-red-400 text-sm">{errors[field.key]}</p>
       )}
     </div>
   );
@@ -145,34 +146,40 @@ function TextField({
       <input
         type={field.type}
         placeholder={field.placeholder}
-        className={`border-2 rounded-md p-2 outline-none transition-colors duration-300 hover:shadow-sm ${
+        className={`border-2 rounded-md p-2 outline-none transition-colors duration-300 bg-neutral-900 text-zinc-100 placeholder:text-zinc-500 hover:shadow-sm ${
           error && touched
-            ? "border-red-400 focus:border-red-500"
-            : "border-gray-300 focus:border-blue-400"
+            ? "border-red-500 focus:border-red-400"
+            : "border-neutral-600 focus:border-zinc-400"
         }`}
         value={value}
         onChange={(e) => onChange(field.key, e.target.value)}
         onBlur={() => onBlur(field.key)}
       />
       {touched && error && (
-        <p className="text-red-500 text-sm">{error}</p>
+        <p className="text-red-400 text-sm">{error}</p>
       )}
     </>
   );
 }
 
-export default function Join() {
-  const [values, setValues] = useState<Record<string, any>>(
-    Object.fromEntries(FIELDS.map((f) => [f.key, ""]))
+function emptyValues(): Record<string, unknown> {
+  return Object.fromEntries(
+    FIELDS.map((f) => [f.key, f.key === "location" ? [] : ""])
   );
+}
+
+export default function Join() {
+  const [values, setValues] = useState<Record<string, unknown>>(emptyValues);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [locationCity, setLocationCity] = useState<string>("");
   const [locationLoading, setLocationLoading] = useState(false);
   const [locationError, setLocationError] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
-  const { id } = useParams();
+  const params = useParams();
+  const groupId = Array.isArray(params.id) ? params.id[0] : params.id;
   const router = useRouter();
 
   useEffect(() => {
@@ -230,7 +237,8 @@ export default function Join() {
     );
   }, []);
 
-  const handleChange = (key: string, raw: any) => {
+  const handleChange = (key: string, raw: string) => {
+    setSubmitError("");
     setValues((prev) => ({ ...prev, [key]: raw }));
     if (touched[key]) {
       const field = FIELDS.find((f) => f.key === key)!;
@@ -241,12 +249,21 @@ export default function Join() {
   const handleBlur = (key: string) => {
     setTouched((prev) => ({ ...prev, [key]: true }));
     const field = FIELDS.find((f) => f.key === key)!;
-    setErrors((prev) => ({ ...prev, [key]: field.validate(values[key]) }));
+    setErrors((prev) => ({
+      ...prev,
+      [key]: field.validate(values[key] as never),
+    }));
   };
 
   const handleSubmit = async () => {
-    // This should never happen since you should have the user id on page load but just in case
+    setSubmitError("");
     if (!localStorage.getItem("user_id")) {
+      localStorage.setItem("user_id", crypto.randomUUID());
+    }
+    const userId = localStorage.getItem("user_id")!;
+
+    if (!groupId) {
+      setSubmitError("Invalid invite link (missing group id).");
       return;
     }
 
@@ -256,7 +273,7 @@ export default function Join() {
 
     for (const field of FIELDS) {
       newTouched[field.key] = true;
-      const msg = field.validate(values[field.key]);
+      const msg = field.validate(values[field.key] as never);
       newErrors[field.key] = msg;
       if (msg) hasError = true;
     }
@@ -267,46 +284,76 @@ export default function Join() {
 
     setSubmitting(true);
 
-    console.log({...values, user_id: localStorage.getItem("user_id")})
+    const location = Array.isArray(values.location)
+      ? values.location
+      : [];
+    const body = {
+      name: String(values.name ?? ""),
+      budget: String(values.budget ?? ""),
+      likes: String(values.likes ?? ""),
+      dislikes: String(values.dislikes ?? ""),
+      available_times: String(values.available_times ?? ""),
+      distance: String(values.distance ?? ""),
+      location,
+      user_id: userId,
+    };
 
     try {
-      const response = await fetch(`/api/submit/${id}`, {
-        method: "POST",
-        body: JSON.stringify({...values, user_id: localStorage.getItem("user_id")}),
-        headers: {
-          "Content-Type": "application/json", // Make sure you set the content type (bruh)
-        },
-      });
+      const response = await fetch(
+        `/api/submit/${encodeURIComponent(groupId)}`,
+        {
+          method: "POST",
+          body: JSON.stringify(body),
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
-        throw new Error("Failed to join event");
+        const d = (data as { detail?: unknown }).detail;
+        const msg =
+          typeof d === "string"
+            ? d
+            : response.status === 404
+              ? "Group not found — ask the organizer for a fresh link or create the group first."
+              : "Could not save your answers. Is the backend running on port 8000?";
+        throw new Error(msg);
       }
-      const data = await response.json();
-      if (data.error) {
-        throw new Error(data.error);
+      if ((data as { error?: string }).error) {
+        throw new Error((data as { error: string }).error);
       }
 
       router.push(`/done`);
+    } catch (e) {
+      setSubmitError(
+        e instanceof Error ? e.message : "Something went wrong. Try again."
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <div className="flex flex-col flex-1 items-center font-sans py-10">
-      <h1 className={`${amatic.className} text-7xl font-light pb-7 text-center`}> {/* 7 is my lucky number */}
+    <div className="flex flex-col flex-1 w-full items-center font-sans py-10 px-4 bg-neutral-900 text-zinc-100 min-h-full">
+      <h1
+        className={`${dmSansDisplay.className} text-7xl font-semibold pb-7 text-center tracking-tight text-zinc-50`}
+      >
         What to Meet
       </h1>
 
-      <p className="text-center text-gray-500 pb-5 font-semibold"><strong>Note:</strong> All fields are free response!</p>
-
-      <div className="bg-fuchsia-50 p-7 rounded-lg md:min-w-[550px] lg:min-w-[760px]">
+      <p className="text-center text-zinc-400 pb-2 max-w-lg px-4">
+        Tell us your name, preferences, and location so the group can plan your event.
+      </p>
+      <div className="bg-neutral-800 p-7 rounded-lg border border-neutral-700 shadow-lg md:min-w-[550px] lg:min-w-[760px] mt-2">
         <div className="flex flex-col gap-5">
           {FIELDS.map((field) => (
             <div key={field.key} className="flex flex-col gap-1">
-              <label className="text-lg font-bold">
+              <label className="text-lg font-bold text-zinc-100">
                 {field.label}
-                {field.required && <span className="font-normal text-red-500 ml-1">*</span>}
+                <span className="font-normal text-red-400 ml-1">*</span>
               </label>
               {field.type === "location" ? (
                 <LocationField
@@ -321,7 +368,11 @@ export default function Join() {
               ) : (
                 <TextField
                   field={field}
-                  value={values[field.key]}
+                  value={
+                    typeof values[field.key] === "string"
+                      ? (values[field.key] as string)
+                      : ""
+                  }
                   touched={!!touched[field.key]}
                   error={errors[field.key] || ""}
                   onChange={handleChange}
@@ -332,11 +383,17 @@ export default function Join() {
           ))}
         </div>
 
+        {submitError ? (
+          <p className="text-red-400 text-sm mt-4 text-center" role="alert">
+            {submitError}
+          </p>
+        ) : null}
+
         <div className="pt-5 flex justify-center">
           <button
             type="button"
             disabled={submitting}
-            className="flex items-center justify-center gap-2 bg-rose-600 text-white px-6 py-3 rounded-md hover:bg-rose-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center justify-center gap-2 bg-zinc-100 text-neutral-900 px-6 py-3 rounded-md hover:bg-white transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
             onClick={handleSubmit}
           >
             {submitting ? (

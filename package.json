@@ -7,7 +7,7 @@
     "frontend:build": "next build",
     "frontend:start": "next start",
     "frontend:lint": "eslint",
-    "backend:dev": "cd backend && .venv/bin/python main.py",
+    "backend:dev": "node scripts/backend-dev.mjs",
     "dev": "concurrently \"npm run frontend:dev\" \"npm run backend:dev\""
   },
   "dependencies": {

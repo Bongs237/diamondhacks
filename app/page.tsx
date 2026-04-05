@@ -1,15 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Amatic_SC } from "next/font/google";
+import { DM_Sans } from "next/font/google";
 import { useRouter } from "next/navigation";
 import { SpinnerIcon } from "@/components/SpinnerIcon";
 import { GroupData } from "@/utils/types";
 import { Users, Calendar, ChevronRight, LogOut } from "lucide-react";
 
-const amatic = Amatic_SC({
+const dmSansDisplay = DM_Sans({
   subsets: ["latin"],
-  weight: ["400", "700"],
+  weight: ["400", "600", "700"],
 });
 
 const STATUS_LABELS: Record<string, { text: string; color: string }> = {
@@ -33,7 +33,8 @@ export default function Home() {
     fetch(`/api/user/${userId}/groups`)
       .then((res) => res.json())
       .then((data) => {
-        setGroups(data);
+        // API must return a JSON array; errors/HTML/proxy responses often are not.
+        setGroups(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(() => setLoading(false));
@@ -74,22 +75,24 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col flex-1 items-center font-sans py-10 px-4">
-      <h1 className={`${amatic.className} text-7xl font-light text-center`}> {/* It's peanut butter ai slop time. I'm so tired that I don't even wanna do this smh */}
+    <div className="flex flex-col flex-1 w-full items-center font-sans py-10 px-4 bg-neutral-900 text-zinc-100 min-h-full">
+      <h1
+        className={`${dmSansDisplay.className} text-7xl font-semibold text-center tracking-tight text-zinc-50`}
+      >
         What to Meet
       </h1>
-      <h2 className="text-gray-500 py-8 text-2xl font-semibold">Your events</h2>
+      <h2 className="text-zinc-400 py-8 text-2xl font-semibold">Your events</h2>
 
       {loading ? (
-        <div className="flex items-center gap-2 text-gray-500 py-20">
+        <div className="flex items-center gap-2 text-zinc-400 py-20">
           <SpinnerIcon />
           Loading your events…
         </div>
       ) : groups.length === 0 ? (
         <div className="flex flex-col items-center gap-4 py-20 text-center">
-          <Calendar className="h-16 w-16 text-gray-300" />
-          <p className="text-gray-500 text-lg">No events yet</p>
-          <p className="text-gray-400 text-sm max-w-sm">
+          <Calendar className="h-16 w-16 text-zinc-600" />
+          <p className="text-zinc-300 text-lg">No events yet</p>
+          <p className="text-zinc-500 text-sm max-w-sm">
             Join an event using a link from a friend; it'll show up here.
           </p>
         </div>
@@ -107,28 +110,28 @@ export default function Home() {
               <button
                 key={group.group_id}
                 onClick={() => router.push(`/dashboard/${group.group_id}`)}
-                className="bg-fuchsia-50 rounded-lg p-5 flex items-center gap-4 hover:bg-fuchsia-100 transition-colors cursor-pointer text-left w-full"
+                className="bg-neutral-800 rounded-lg border border-neutral-700 p-5 flex items-center gap-4 hover:border-zinc-500 hover:bg-neutral-800/90 transition-colors cursor-pointer text-left w-full"
               >
-                <div className="bg-rose-100 rounded-full p-3 shrink-0">
-                  <Users className="h-6 w-6 text-rose-600" />
+                <div className="bg-neutral-700 rounded-full p-3 shrink-0">
+                  <Users className="h-6 w-6 text-zinc-200" />
                 </div>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-lg truncate">
+                    <span className="font-bold text-lg truncate text-zinc-50">
                       Event {group.group_id}
                     </span>
                     {statusBadge(group.status)}
                   </div>
 
-                  <p className="text-gray-500 text-sm mt-1 truncate">
+                  <p className="text-zinc-400 text-sm mt-1 truncate">
                     {myName ? `You (${myName})` : "You"}
                     {otherMembers.length > 0 && (
                       <> &middot; {otherMembers.join(", ")}</>
                     )}
                   </p>
 
-                  <p className="text-gray-400 text-xs mt-1">
+                  <p className="text-zinc-500 text-xs mt-1">
                     {group.member_count} member{group.member_count !== 1 && "s"}
                     {group.vote_result && (
                       <> &middot; Winner: {group.vote_result}</>
@@ -140,7 +143,7 @@ export default function Home() {
                   <button
                     onClick={(e) => handleDropout(e, group.group_id)}
                     disabled={droppingOut === group.group_id}
-                    className="p-2 rounded-full text-gray-400 hover:bg-red-100 hover:text-red-600 transition-colors disabled:opacity-50 cursor-pointer"
+                    className="p-2 rounded-full text-zinc-500 hover:bg-red-950/50 hover:text-red-400 transition-colors disabled:opacity-50 cursor-pointer"
                     title="Drop out"
                   >
                     {droppingOut === group.group_id ? (
@@ -149,7 +152,7 @@ export default function Home() {
                       <LogOut className="h-5 w-5" />
                     )}
                   </button>
-                  <ChevronRight className="h-5 w-5 text-gray-400" />
+                  <ChevronRight className="h-5 w-5 text-zinc-500" />
                 </div>
               </button>
             );
